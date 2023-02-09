@@ -13,5 +13,14 @@ We use SUBLEQ, which is capable of defining a universal computer.
             PC = PC + 1
 
 ## Data format
-The input and output space is a $n\times d$ matrix. For each $d$-dimensional token, 
+![](Input.png)
+The input and output space is a $n\times d$ matrix. For each $d$-dimensional token, $\log(n)$ bits is used for positional encoding, $1$ bit is used for indicator of scratchpad. In memory column, $N$ bits are used for storing integer in memory. In an instruction column, $3log(n)$ bits are used to store instruction. 
+## Hyperparameters
+* $N$: number of bits for each stored integer
+* $s$: columns of scatch pad
+* $m$: number of memory locations
+* $n$: total number of columns, so number of instructions is $n-m-s$. 
+## Data Generation
+We use a python script to simulate `SUBLEQ` and generate the input/ouput pairs. 
 ## Architecture
+We use a [vanilla transfomer model](https://pytorch.org/docs/stable/generated/torch.nn.Transformer.html) with x encoder and decoder layers. 
