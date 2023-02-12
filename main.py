@@ -1,25 +1,30 @@
 # coding: utf-8
 import argparse
+import json
 import time
 import math
 import os
 import torch
 import torch.nn as nn
 import torch.onnx
+from tqdm import tqdm
 
-import data
+from data import get_data_iter
 import model
+import simulator
+
+import wandb
 
 parser = argparse.ArgumentParser(description='Training Looped Transformers')
-parser.add_argument('--data', type=str, default='./data/wikitext-2',
-                    help='location of the data corpus')
+parser.add_argument('--data', type=str, default='.',
+                    help='location of the data')
 parser.add_argument('--model', type=str, default='Transformer',
                     help='type of network')
-parser.add_argument('--emsize', type=int, default=200,
-                    help='size of word embeddings')
-parser.add_argument('--nhid', type=int, default=200,
+# parser.add_argument('--emsize', type=int, default=200,
+#                     help='size of word embeddings')
+parser.add_argument('--nhid', type=int, default=512,
                     help='number of hidden units per layer')
-parser.add_argument('--nlayers', type=int, default=2,
+parser.add_argument('--nlayers', type=int, default=16,
                     help='number of layers')
 parser.add_argument('--lr', type=float, default=20,
                     help='initial learning rate')
@@ -27,10 +32,12 @@ parser.add_argument('--clip', type=float, default=0.25,
                     help='gradient clipping')
 parser.add_argument('--epochs', type=int, default=40,
                     help='upper epoch limit')
-parser.add_argument('--batch_size', type=int, default=20, metavar='N',
+parser.add_argument('--batch_size', type=int, default=200, metavar='N',
                     help='batch size')
-parser.add_argument('--bptt', type=int, default=35,
-                    help='sequence length')
+parser.add_argument('--eval_batch_size', type=int, default=200, metavar='N',
+                    help='batch size')
+# parser.add_argument('--bptt', type=int, default=35,
+#                     help='sequence length')
 parser.add_argument('--dropout', type=float, default=0.2,
                     help='dropout applied to layers (0 = no dropout)')
 parser.add_argument('--tied', action='store_true',
@@ -47,11 +54,25 @@ parser.add_argument('--save', type=str, default='model.pt',
                     help='path to save the final model')
 parser.add_argument('--onnx-export', type=str, default='',
                     help='path to export the final model in onnx format')
-parser.add_argument('--nhead', type=int, default=2,
+parser.add_argument('--nhead', type=int, default=4,
                     help='the number of heads in the encoder/decoder of the transformer model')
 parser.add_argument('--dry-run', action='store_true',
                     help='verify the code and the model')
+
+parser.add_argument('-N', type=int, default=4, required=False, help='Number of bits for integers stored in memory column')
+parser.add_argument('-s', type=int, default=4, required=False, help='Number of scratch pad columns')
+parser.add_argument('-m', type=int, default=4, required=False, help='Number of memory locations')
+parser.add_argument('-n', type=int, default=16, required=False, help='Total number of columns')
+parser.add_argument('--num_train', type=int, default=10000, required=False, help='Number of training data points')
+parser.add_argument('--num_valid', type=int, default=500, required=False, help='Number of validutation data points')
+parser.add_argument('--output', type=str, default='.', required=False, help='Output directory')
+
+parser.add_argument('--wandb', action='store_true', default=False)
+
 args = parser.parse_args()
+
+if args.wandb:
+    wandb.init(project="training-looped-transformers")
 
 # Set the random seed manually for reproducibility.
 torch.manual_seed(args.seed)
@@ -74,42 +95,23 @@ else:
 # Load data
 ###############################################################################
 
+# train_data = torch.load(os.path.join(args.data, 'train.pt'))
+# valid_data = torch.load(os.path.join(args.data, 'valid.pt'))
+# with open(os.path.join(args.data, 'config.json'), 'r') as f:
+#     data_config = json.load(f)
 
-
-# Starting from sequential data, batchify arranges the dataset into columns.
-# For instance, with the alphabet as the sequence and batch size 4, we'd get
-# ┌ a g m s ┐
-# │ b h n t │
-# │ c i o u │
-# │ d j p v │
-# │ e k q w │
-# └ f l r x ┘.
-# These columns are treated as independent by the model, which means that the
-# dependence of e. g. 'g' on 'f' can not be learned, but allows more efficient
-# batch processing.
-
-def batchify(data, bsz):
-    # Work out how cleanly we can divide the dataset into bsz parts.
-    nbatch = data.size(0) // bsz
-    # Trim off any extra elements that wouldn't cleanly fit (remainders).
-    data = data.narrow(0, 0, nbatch * bsz)
-    # Evenly divide the data across the bsz batches.
-    data = data.view(bsz, -1).t().contiguous()
-    return data.to(device)
-
-eval_batch_size = 10
-train_data = batchify(corpus.train, args.batch_size)
-val_data = batchify(corpus.valid, eval_batch_size)
-test_data = batchify(corpus.test, eval_batch_size)
+# print('train_data', train_data.shape)
+# print('valid_data', valid_data.shape)
+# print('data_config', data_config)
+sim = simulator.SubleqSim(args.N, args.s, args.m, args.n)
 
 ###############################################################################
 # Build the model
 ###############################################################################
 
-ntokens = len(corpus.dictionary)
 if args.model == 'Transformer':
-    model = model.TransformerModel(ntokens, args.emsize, args.nhead, args.nhid, args.nlayers, args.dropout).to(device)
-criterion = nn.NLLLoss()
+    model = model.LoopedTransformerModel(sim, args.nhead, args.nlayers, args.nhid, args.dropout).to(device)
+criterion = nn.MSELoss()
 
 ###############################################################################
 # Training code
@@ -134,31 +136,24 @@ def repackage_hidden(h):
 # by the batchify function. The chunks are along dimension 0, corresponding
 # to the seq_len dimension in the LSTM.
 
-def get_batch(source, i):
-    seq_len = min(args.bptt, len(source) - 1 - i)
-    data = source[i:i+seq_len]
-    target = source[i+1:i+1+seq_len].view(-1)
-    return data, target
+# def get_batch(source, i):
+#     seq_len = min(args.bptt, len(source) - 1 - i)
+#     data = source[i:i+seq_len]
+#     target = source[i+1:i+1+seq_len].view(-1)
+#     return data, target
 
 
-def evaluate(data_source):
+def evaluate():
     # Turn on evaluation mode which disables dropout.
     model.eval()
     total_loss = 0.
-    ntokens = len(corpus.dictionary)
-    if args.model != 'Transformer':
-        hidden = model.init_hidden(eval_batch_size)
     with torch.no_grad():
-        for i in range(0, data_source.size(0) - 1, args.bptt):
-            data, targets = get_batch(data_source, i)
+        num_batches = args.num_valid // args.eval_batch_size
+        for i, (data, targets) in enumerate(get_data_iter(sim, args.eval_batch_size, num_batches, device)):
             if args.model == 'Transformer':
                 output = model(data)
-                output = output.view(-1, ntokens)
-            else:
-                output, hidden = model(data, hidden)
-                hidden = repackage_hidden(hidden)
-            total_loss += len(data) * criterion(output, targets).item()
-    return total_loss / (len(data_source) - 1)
+            total_loss += criterion(output, targets).item()
+    return total_loss / (num_batches * args.eval_batch_size)
 
 
 def train():
@@ -166,20 +161,13 @@ def train():
     model.train()
     total_loss = 0.
     start_time = time.time()
-    ntokens = len(corpus.dictionary)
-    if args.model != 'Transformer':
-        hidden = model.init_hidden(args.batch_size)
-    for batch, i in enumerate(range(0, train_data.size(0) - 1, args.bptt)):
-        data, targets = get_batch(train_data, i)
+    num_batches = args.num_train // args.batch_size
+    for i, (data, targets) in enumerate(get_data_iter(sim, args.batch_size, num_batches, device)):
         # Starting each batch, we detach the hidden state from how it was previously produced.
         # If we didn't, the model would try backpropagating all the way to start of the dataset.
         model.zero_grad()
         if args.model == 'Transformer':
             output = model(data)
-            output = output.view(-1, ntokens)
-        else:
-            hidden = repackage_hidden(hidden)
-            output, hidden = model(data, hidden)
         loss = criterion(output, targets)
         loss.backward()
 
@@ -190,12 +178,12 @@ def train():
 
         total_loss += loss.item()
 
-        if batch % args.log_interval == 0 and batch > 0:
+        if i % args.log_interval == 0 and i > 0:
             cur_loss = total_loss / args.log_interval
             elapsed = time.time() - start_time
             print('| epoch {:3d} | {:5d}/{:5d} batches | lr {:02.2f} | ms/batch {:5.2f} | '
                     'loss {:5.2f} | ppl {:8.2f}'.format(
-                epoch, batch, len(train_data) // args.bptt, lr,
+                epoch, i, args.batch_size * num_batches, lr,
                 elapsed * 1000 / args.log_interval, cur_loss, math.exp(cur_loss)))
             total_loss = 0
             start_time = time.time()
@@ -220,7 +208,7 @@ try:
     for epoch in range(1, args.epochs+1):
         epoch_start_time = time.time()
         train()
-        val_loss = evaluate(val_data)
+        val_loss = evaluate()
         print('-' * 89)
         print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
                 'valid ppl {:8.2f}'.format(epoch, (time.time() - epoch_start_time),
@@ -248,12 +236,8 @@ with open(args.save, 'rb') as f:
         model.rnn.flatten_parameters()
 
 # Run on test data.
-test_loss = evaluate(test_data)
+test_loss = evaluate()
 print('=' * 89)
 print('| End of training | test loss {:5.2f} | test ppl {:8.2f}'.format(
     test_loss, math.exp(test_loss)))
 print('=' * 89)
-
-if len(args.onnx_export) > 0:
-    # Export the model in ONNX format.
-    export_onnx(args.onnx_export, batch_size=1, seq_len=args.bptt)

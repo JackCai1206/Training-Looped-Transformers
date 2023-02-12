@@ -29,6 +29,7 @@ class SubleqSim():
         self.n = n
         self.log_n = log_n = ceil(log2(n))
         self.d = d = 5 * log_n + 3 * N + 1
+        self.col_dim = 2 ** ceil(log2(d))
         self.inst_len = n - m - s
         assert self.inst_len > 0
         self.PC_slice = slice(d-2*log_n-1,d-log_n-1), slice(0,1)
@@ -40,7 +41,7 @@ class SubleqSim():
     
     def create_state(self):
         N, s, m, n, log_n, d, inst_len = self.N, self.s, self.m, self.n, self.log_n, self.d, self.inst_len
-        self.X = torch.zeros(d, n)
+        self.X = torch.zeros(self.col_dim, n)
         PC = to_binary_col(torch.randint(s+m, n, (1,)), log_n)
         pos_enc = to_binary_col(torch.arange(0, n), log_n)
         scratch_ind = torch.cat([torch.ones(1, s), torch.zeros(1, n-s)], dim=1)
