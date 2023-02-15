@@ -13,10 +13,9 @@ class LoopedTransformerModel(torch.nn.Module):
         self.d_model = sim.col_dim
         self.nhead = nhead
         self.num_encoder_layers = num_encoder_layers
-    
-    def forward(self, src, src_mask=None, src_key_padding_mask=None):
+
         N, s, m, n, log_n, d, inst_len = self.sim.N, self.sim.s, self.sim.m, self.sim.n, self.sim.log_n, self.sim.d, self.sim.inst_len
-        src_mask = torch.ones(src.shape[1], src.shape[1], dtype=torch.bool, device=src.device)
+        src_mask = torch.ones(n, n, dtype=torch.bool)
         # memory can attend to instructions
         src_mask[s:s+m, s+m:n] = False
         # memory can attend to PC
@@ -25,4 +24,9 @@ class LoopedTransformerModel(torch.nn.Module):
         src_mask[s+m:n, 0] = False
         # scratch can attend to everything
         src_mask[0:s, :] = False
-        return self.encoder(src, src_mask, src_key_padding_mask)
+        self.src_mask = src_mask
+    
+    def forward(self, src, src_mask=None, src_key_padding_mask=None):
+        # src_mask = self.src_mask.to(src.device)
+        output = self.encoder(src, src_mask, src_key_padding_mask)
+        return output

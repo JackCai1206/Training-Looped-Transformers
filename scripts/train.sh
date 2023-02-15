@@ -7,4 +7,6 @@ torchrun \
     ../main.py \
     --data=/data/hulab/zcai75/looped-transformers/ \
     --cuda \
-    --wandb 
+    --wandb \
+    --log_interval=10 \
+    --save=/data/hulab/zcai75/looped-transformers/checkpoints/

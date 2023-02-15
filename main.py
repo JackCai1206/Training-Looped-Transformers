@@ -22,7 +22,7 @@ parser.add_argument('--model', type=str, default='Transformer',
                     help='type of network')
 # parser.add_argument('--emsize', type=int, default=200,
 #                     help='size of word embeddings')
-parser.add_argument('--nhid', type=int, default=512,
+parser.add_argument('--nhid', type=int, default=2048,
                     help='number of hidden units per layer')
 parser.add_argument('--nlayers', type=int, default=16,
                     help='number of layers')
@@ -48,13 +48,13 @@ parser.add_argument('--cuda', action='store_true', default=False,
                     help='use CUDA')
 parser.add_argument('--mps', action='store_true', default=False,
                         help='enables macOS GPU training')
-parser.add_argument('--log-interval', type=int, default=200, metavar='N',
+parser.add_argument('--log_interval', type=int, default=20, metavar='N',
                     help='report interval')
 parser.add_argument('--save', type=str, default='model.pt',
                     help='path to save the final model')
 parser.add_argument('--onnx-export', type=str, default='',
                     help='path to export the final model in onnx format')
-parser.add_argument('--nhead', type=int, default=4,
+parser.add_argument('--nhead', type=int, default=8,
                     help='the number of heads in the encoder/decoder of the transformer model')
 parser.add_argument('--dry-run', action='store_true',
                     help='verify the code and the model')
@@ -65,7 +65,6 @@ parser.add_argument('-m', type=int, default=4, required=False, help='Number of m
 parser.add_argument('-n', type=int, default=16, required=False, help='Total number of columns')
 parser.add_argument('--num_train', type=int, default=10000, required=False, help='Number of training data points')
 parser.add_argument('--num_valid', type=int, default=500, required=False, help='Number of validutation data points')
-parser.add_argument('--output', type=str, default='.', required=False, help='Output directory')
 
 parser.add_argument('--wandb', action='store_true', default=False)
 
@@ -73,6 +72,9 @@ args = parser.parse_args()
 
 if args.wandb:
     wandb.init(project="training-looped-transformers")
+
+if not os.path.exists(args.save):
+    os.makedirs(args.save)
 
 # Set the random seed manually for reproducibility.
 torch.manual_seed(args.seed)
@@ -112,6 +114,8 @@ sim = simulator.SubleqSim(args.N, args.s, args.m, args.n)
 if args.model == 'Transformer':
     model = model.LoopedTransformerModel(sim, args.nhead, args.nlayers, args.nhid, args.dropout).to(device)
 criterion = nn.MSELoss()
+if args.wandb:
+    wandb.log({'src_mask': wandb.Image(model.src_mask.float())})
 
 ###############################################################################
 # Training code
@@ -153,6 +157,10 @@ def evaluate():
             if args.model == 'Transformer':
                 output = model(data)
             total_loss += criterion(output, targets).item()
+            if i == 0:
+                wandb.log({'example_input': wandb.Image(data[0].T.detach().cpu().numpy())})
+                wandb.log({'example_output': wandb.Image(output[0].T.detach().cpu().numpy())})
+                wandb.log({'example_target': wandb.Image(targets[0].T.detach().cpu().numpy())})
     return total_loss / (num_batches * args.eval_batch_size)
 
 
@@ -181,10 +189,14 @@ def train():
         if i % args.log_interval == 0 and i > 0:
             cur_loss = total_loss / args.log_interval
             elapsed = time.time() - start_time
+
+            if args.wandb:
+                wandb.log({'train_loss': cur_loss})
+
             print('| epoch {:3d} | {:5d}/{:5d} batches | lr {:02.2f} | ms/batch {:5.2f} | '
-                    'loss {:5.2f} | ppl {:8.2f}'.format(
+                    'loss {:5.2f}'.format(
                 epoch, i, args.batch_size * num_batches, lr,
-                elapsed * 1000 / args.log_interval, cur_loss, math.exp(cur_loss)))
+                elapsed * 1000 / args.log_interval, cur_loss))
             total_loss = 0
             start_time = time.time()
         if args.dry_run:
@@ -210,13 +222,14 @@ try:
         train()
         val_loss = evaluate()
         print('-' * 89)
-        print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
-                'valid ppl {:8.2f}'.format(epoch, (time.time() - epoch_start_time),
-                                           val_loss, math.exp(val_loss)))
+        print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} |'.format(epoch, (time.time() - epoch_start_time),
+                                           val_loss))
         print('-' * 89)
+        if args.wandb:
+            wandb.log({'val_loss': val_loss})
         # Save the model if the validation loss is the best we've seen so far.
         if not best_val_loss or val_loss < best_val_loss:
-            with open(args.save, 'wb') as f:
+            with open(os.path.join(args.save, 'model.pt'), 'wb') as f:
                 torch.save(model, f)
             best_val_loss = val_loss
         else:
@@ -227,7 +240,7 @@ except KeyboardInterrupt:
     print('Exiting from training early')
 
 # Load the best saved model.
-with open(args.save, 'rb') as f:
+with open(os.path.join(args.save, 'model.pt'), 'rb') as f:
     model = torch.load(f)
     # after load the rnn params are not a continuous chunk of memory
     # this makes them a continuous chunk, and will speed up forward pass
@@ -238,6 +251,6 @@ with open(args.save, 'rb') as f:
 # Run on test data.
 test_loss = evaluate()
 print('=' * 89)
-print('| End of training | test loss {:5.2f} | test ppl {:8.2f}'.format(
-    test_loss, math.exp(test_loss)))
+print('| End of training | test loss {:5.2f}'.format(
+    test_loss))
 print('=' * 89)
