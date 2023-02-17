@@ -56,13 +56,13 @@ parser.add_argument('--onnx-export', type=str, default='',
                     help='path to export the final model in onnx format')
 parser.add_argument('--nhead', type=int, default=8,
                     help='the number of heads in the encoder/decoder of the transformer model')
-parser.add_argument('--dry-run', action='store_true',
+parser.add_argument('--dry_run', action='store_true',
                     help='verify the code and the model')
 
-parser.add_argument('-N', type=int, default=4, required=False, help='Number of bits for integers stored in memory column')
-parser.add_argument('-s', type=int, default=4, required=False, help='Number of scratch pad columns')
-parser.add_argument('-m', type=int, default=4, required=False, help='Number of memory locations')
-parser.add_argument('-n', type=int, default=16, required=False, help='Total number of columns')
+parser.add_argument('-N', type=int, default=32, required=False, help='Number of bits for integers stored in memory column')
+parser.add_argument('-s', type=int, default=32, required=False, help='Number of scratch pad columns')
+parser.add_argument('-m', type=int, default=32, required=False, help='Number of memory locations')
+parser.add_argument('-n', type=int, default=128, required=False, help='Total number of columns')
 parser.add_argument('--num_train', type=int, default=10000, required=False, help='Number of training data points')
 parser.add_argument('--num_valid', type=int, default=500, required=False, help='Number of validutation data points')
 
@@ -72,6 +72,7 @@ args = parser.parse_args()
 
 if args.wandb:
     wandb.init(project="training-looped-transformers")
+    wandb.log({'args': str(args)})
 
 if not os.path.exists(args.save):
     os.makedirs(args.save)
@@ -116,6 +117,8 @@ if args.model == 'Transformer':
 criterion = nn.MSELoss()
 if args.wandb:
     wandb.log({'src_mask': wandb.Image(model.src_mask.float())})
+optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.8, patience=200, verbose=True)
 
 ###############################################################################
 # Training code
@@ -157,11 +160,11 @@ def evaluate():
             if args.model == 'Transformer':
                 output = model(data)
             total_loss += criterion(output, targets).item()
-            if i == 0:
+            if i == 0 and args.wandb:
                 wandb.log({'example_input': wandb.Image(data[0].T.detach().cpu().numpy())})
                 wandb.log({'example_output': wandb.Image(output[0].T.detach().cpu().numpy())})
                 wandb.log({'example_target': wandb.Image(targets[0].T.detach().cpu().numpy())})
-    return total_loss / (num_batches * args.eval_batch_size)
+    return total_loss / (num_batches)
 
 
 def train():
@@ -171,18 +174,20 @@ def train():
     start_time = time.time()
     num_batches = args.num_train // args.batch_size
     for i, (data, targets) in enumerate(get_data_iter(sim, args.batch_size, num_batches, device)):
+        i = i+1
         # Starting each batch, we detach the hidden state from how it was previously produced.
         # If we didn't, the model would try backpropagating all the way to start of the dataset.
-        model.zero_grad()
+        optimizer.zero_grad()
         if args.model == 'Transformer':
             output = model(data)
         loss = criterion(output, targets)
         loss.backward()
+        optimizer.step()
 
         # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
         torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-        for p in model.parameters():
-            p.data.add_(p.grad, alpha=-lr)
+        # for p in model.parameters():
+        #     p.data.add_(p.grad, alpha=-lr)
 
         total_loss += loss.item()
 
@@ -195,7 +200,7 @@ def train():
 
             print('| epoch {:3d} | {:5d}/{:5d} batches | lr {:02.2f} | ms/batch {:5.2f} | '
                     'loss {:5.2f}'.format(
-                epoch, i, args.batch_size * num_batches, lr,
+                epoch, i, num_batches, optimizer.param_groups[0]['lr'],
                 elapsed * 1000 / args.log_interval, cur_loss))
             total_loss = 0
             start_time = time.time()
@@ -221,20 +226,24 @@ try:
         epoch_start_time = time.time()
         train()
         val_loss = evaluate()
+        scheduler.step(val_loss)
         print('-' * 89)
-        print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} |'.format(epoch, (time.time() - epoch_start_time),
+        print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.8f} |'.format(epoch, (time.time() - epoch_start_time),
                                            val_loss))
         print('-' * 89)
         if args.wandb:
             wandb.log({'val_loss': val_loss})
+            wandb.log({'lr': optimizer.param_groups[0]['lr']})
         # Save the model if the validation loss is the best we've seen so far.
         if not best_val_loss or val_loss < best_val_loss:
             with open(os.path.join(args.save, 'model.pt'), 'wb') as f:
                 torch.save(model, f)
             best_val_loss = val_loss
-        else:
-            # Anneal the learning rate if no improvement has been seen in the validation dataset.
-            lr /= 4.0
+        # elif val_loss < best_val_loss + 0.01:
+        #     pass
+        # else:
+        #     # Anneal the learning rate if no improvement has been seen in the validation dataset.
+        #     lr /= 1.01
 except KeyboardInterrupt:
     print('-' * 89)
     print('Exiting from training early')

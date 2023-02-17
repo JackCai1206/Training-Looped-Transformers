@@ -9,6 +9,7 @@ class LoopedTransformerModel(torch.nn.Module):
         encoder_layer = torch.nn.TransformerEncoderLayer(sim.col_dim, nhead, dim_feedforward, dropout, activation, batch_first=True)
         self.encoder = torch.nn.TransformerEncoder(encoder_layer, num_encoder_layers)
         # self.linear = torch.nn.Linear(d_model, d_model)
+        # self.transformer = torch.nn.Transformer(d_model=sim.col_dim, nhead=nhead, num_encoder_layers=num_encoder_layers, dim_feedforward=dim_feedforward, dropout=dropout, activation=activation, batch_first=True)
         self.sim = sim
         self.d_model = sim.col_dim
         self.nhead = nhead
@@ -27,6 +28,10 @@ class LoopedTransformerModel(torch.nn.Module):
         self.src_mask = src_mask
     
     def forward(self, src, src_mask=None, src_key_padding_mask=None):
-        # src_mask = self.src_mask.to(src.device)
+        src_mask = self.src_mask.to(src.device)
+        # print(src.shape)
         output = self.encoder(src, src_mask, src_key_padding_mask)
+        # tgt = src
+        # output = self.transformer(src, tgt,src_mask, src_key_padding_mask)
+        # print(output.shape)
         return output
