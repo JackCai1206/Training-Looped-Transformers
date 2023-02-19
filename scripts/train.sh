@@ -14,8 +14,10 @@ torchrun \
     --save=/data/hulab/zcai75/looped-transformers/checkpoints/ \
     --batch_size=500 \
     --eval_batch_size=500 \
-    --nhid=512 \
+    --nhid=1024 \
     --nlayers=9 \
     --nhead=4 \
-    --dropout=0 \
-    --lr=20
+    --dropout=0.3 \
+    --lr=0.0001 \
+    --grad_noise=0 \
+    --block_diag=False

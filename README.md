@@ -23,4 +23,11 @@ The input and output space is a $n\times d$ matrix. For each $d$-dimensional tok
 ## Data Generation
 We use a python script to simulate `SUBLEQ` and generate the input/ouput pairs. 
 ## Architecture
-We use a [vanilla transfomer model](https://pytorch.org/docs/stable/generated/torch.nn.Transformer.html) with x encoder and decoder layers. 
+We use a the transformer encoder in the [vanilla transfomer model](https://pytorch.org/docs/stable/generated/torch.nn.Transformer.html).
+
+## Things I have tried
+* Train set 10k pairs, val set 500. Each input/output pair is a randomly initialized memory and result of executing one step
+* Transformer encoder depth 1/2/4/9/16 layers, width (hidden dimension) 512, number of heads 1/2/4/8
+* L1/L2/ Huber loss
+* 0 --> -100, 1 --> +100
+

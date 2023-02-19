@@ -58,6 +58,8 @@ parser.add_argument('--nhead', type=int, default=8,
                     help='the number of heads in the encoder/decoder of the transformer model')
 parser.add_argument('--dry_run', action='store_true',
                     help='verify the code and the model')
+parser.add_argument('--grad_noise', type=float, default=5e-2)
+parser.add_argument('--block_diag', type=bool, default=True)
 
 parser.add_argument('-N', type=int, default=32, required=False, help='Number of bits for integers stored in memory column')
 parser.add_argument('-s', type=int, default=32, required=False, help='Number of scratch pad columns')
@@ -65,6 +67,7 @@ parser.add_argument('-m', type=int, default=32, required=False, help='Number of 
 parser.add_argument('-n', type=int, default=128, required=False, help='Total number of columns')
 parser.add_argument('--num_train', type=int, default=10000, required=False, help='Number of training data points')
 parser.add_argument('--num_valid', type=int, default=500, required=False, help='Number of validutation data points')
+parser.add_argument('--signed_mag', type=int, default=100, required=False, help='Magnitude of signed binary numbers')
 
 parser.add_argument('--wandb', action='store_true', default=False)
 
@@ -106,7 +109,7 @@ else:
 # print('train_data', train_data.shape)
 # print('valid_data', valid_data.shape)
 # print('data_config', data_config)
-sim = simulator.SubleqSim(args.N, args.s, args.m, args.n)
+sim = simulator.SubleqSim(args.N, args.s, args.m, args.n, args.signed_mag, block_diag=args.block_diag)
 
 ###############################################################################
 # Build the model
@@ -114,11 +117,11 @@ sim = simulator.SubleqSim(args.N, args.s, args.m, args.n)
 
 if args.model == 'Transformer':
     model = model.LoopedTransformerModel(sim, args.nhead, args.nlayers, args.nhid, args.dropout).to(device)
-criterion = nn.MSELoss()
+criterion = nn.L1Loss(reduction='sum')
 if args.wandb:
     wandb.log({'src_mask': wandb.Image(model.src_mask.float())})
-optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.8, patience=200, verbose=True)
+optimizer = torch.optim.SGD(model.parameters(), lr=args.lr)
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.8, patience=100, verbose=True)
 
 ###############################################################################
 # Training code
@@ -149,6 +152,11 @@ def repackage_hidden(h):
 #     target = source[i+1:i+1+seq_len].view(-1)
 #     return data, target
 
+def quantize_data(data):
+    # set data to signed_mag if it is close
+    data[data > 1] = args.signed_mag
+    data[data < -1] = -args.signed_mag
+    return data
 
 def evaluate():
     # Turn on evaluation mode which disables dropout.
@@ -157,13 +165,14 @@ def evaluate():
     with torch.no_grad():
         num_batches = args.num_valid // args.eval_batch_size
         for i, (data, targets) in enumerate(get_data_iter(sim, args.eval_batch_size, num_batches, device)):
-            if args.model == 'Transformer':
-                output = model(data)
+            output = model(data)
+            output = quantize_data(output)
             total_loss += criterion(output, targets).item()
             if i == 0 and args.wandb:
                 wandb.log({'example_input': wandb.Image(data[0].T.detach().cpu().numpy())})
                 wandb.log({'example_output': wandb.Image(output[0].T.detach().cpu().numpy())})
                 wandb.log({'example_target': wandb.Image(targets[0].T.detach().cpu().numpy())})
+                wandb.log({'register_diff': wandb.Image(torch.abs(output[0] - targets[0]).T.detach().cpu().numpy())})
     return total_loss / (num_batches)
 
 
@@ -178,14 +187,18 @@ def train():
         # Starting each batch, we detach the hidden state from how it was previously produced.
         # If we didn't, the model would try backpropagating all the way to start of the dataset.
         optimizer.zero_grad()
-        if args.model == 'Transformer':
-            output = model(data)
+        output = model(data)
+        output = quantize_data(output)
         loss = criterion(output, targets)
         loss.backward()
-        optimizer.step()
+        # add gaussian noise to gradients
+        for p in model.parameters():
+            if p.grad is not None:
+                p.grad += torch.randn(p.grad.shape).to(device) * args.grad_noise
 
         # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
         torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+        optimizer.step()
         # for p in model.parameters():
         #     p.data.add_(p.grad, alpha=-lr)
 

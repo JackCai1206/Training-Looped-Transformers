@@ -1,0 +1,11 @@
+program: main.py
+method: grid
+metric:
+  name: validation_loss
+  goal: minimize
+parameters:
+  learning_rate:
+    min: 0.0001
+    max: 10
+  optimizer:
+    values: ["adam", "sgd"]
