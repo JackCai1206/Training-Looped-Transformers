@@ -60,11 +60,12 @@ parser.add_argument('--dry_run', action='store_true',
                     help='verify the code and the model')
 parser.add_argument('--grad_noise', type=float, default=5e-2)
 parser.add_argument('--block_diag', type=bool, default=True)
+parser.add_argument('--resume', type=str, default=None)
 
-parser.add_argument('-N', type=int, default=32, required=False, help='Number of bits for integers stored in memory column')
-parser.add_argument('-s', type=int, default=32, required=False, help='Number of scratch pad columns')
-parser.add_argument('-m', type=int, default=32, required=False, help='Number of memory locations')
-parser.add_argument('-n', type=int, default=128, required=False, help='Total number of columns')
+parser.add_argument('-N', type=int, default=4, required=False, help='Number of bits for integers stored in memory column')
+parser.add_argument('-s', type=int, default=4, required=False, help='Number of scratch pad columns')
+parser.add_argument('-m', type=int, default=4, required=False, help='Number of memory locations')
+parser.add_argument('-n', type=int, default=16, required=False, help='Total number of columns')
 parser.add_argument('--num_train', type=int, default=10000, required=False, help='Number of training data points')
 parser.add_argument('--num_valid', type=int, default=500, required=False, help='Number of validutation data points')
 parser.add_argument('--signed_mag', type=int, default=100, required=False, help='Magnitude of signed binary numbers')
@@ -73,8 +74,14 @@ parser.add_argument('--wandb', action='store_true', default=False)
 
 args = parser.parse_args()
 
+if args.resume is not None:
+    checkpoint = torch.load(args.resume)
+    run_id = None if 'wandb_id' not in checkpoint else checkpoint['wandb_id']
+else:
+    run_id = wandb.util.generate_id()
+
 if args.wandb:
-    wandb.init(project="training-looped-transformers")
+    wandb.init(project="training-looped-transformers", resume="allow", config=args, id=run_id)
     wandb.log({'args': str(args)})
 
 if not os.path.exists(args.save):
@@ -115,13 +122,23 @@ sim = simulator.SubleqSim(args.N, args.s, args.m, args.n, args.signed_mag, block
 # Build the model
 ###############################################################################
 
-if args.model == 'Transformer':
-    model = model.LoopedTransformerModel(sim, args.nhead, args.nlayers, args.nhid, args.dropout).to(device)
+model = model.LoopedTransformerModel(sim, args.nhead, args.nlayers, args.nhid, args.dropout).to(device)
 criterion = nn.L1Loss(reduction='sum')
 if args.wandb:
     wandb.log({'src_mask': wandb.Image(model.src_mask.float())})
 optimizer = torch.optim.SGD(model.parameters(), lr=args.lr)
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.8, patience=100, verbose=True)
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.7, patience=100, verbose=True, weight_decay=1e-4)
+
+if args.resume is not None:
+    model.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+    epoch_resume = checkpoint['epoch']
+    loss_resume = checkpoint['loss']
+    print('Resuming from epoch', epoch_resume, 'with loss', loss_resume)
+else:
+    epoch_resume = 0
+    loss_resume = 0
 
 ###############################################################################
 # Training code
@@ -231,11 +248,11 @@ def export_onnx(path, batch_size, seq_len):
 
 # Loop over epochs.
 lr = args.lr
-best_val_loss = None
+best_val_loss = loss_resume
 
 # At any point you can hit Ctrl + C to break out of training early.
 try:
-    for epoch in range(1, args.epochs+1):
+    for epoch in range(epoch_resume, args.epochs+1):
         epoch_start_time = time.time()
         train()
         val_loss = evaluate()
@@ -249,8 +266,14 @@ try:
             wandb.log({'lr': optimizer.param_groups[0]['lr']})
         # Save the model if the validation loss is the best we've seen so far.
         if not best_val_loss or val_loss < best_val_loss:
-            with open(os.path.join(args.save, 'model.pt'), 'wb') as f:
-                torch.save(model, f)
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'loss': val_loss,
+                'wandb_id': run_id if args.wandb else None
+            }, os.path.join(args.save, 'model.pt'))
             best_val_loss = val_loss
         # elif val_loss < best_val_loss + 0.01:
         #     pass
@@ -262,16 +285,19 @@ except KeyboardInterrupt:
     print('Exiting from training early')
 
 # Load the best saved model.
-with open(os.path.join(args.save, 'model.pt'), 'rb') as f:
-    model = torch.load(f)
-    # after load the rnn params are not a continuous chunk of memory
-    # this makes them a continuous chunk, and will speed up forward pass
-    # Currently, only rnn model supports flatten_parameters function.
-    if args.model in ['RNN_TANH', 'RNN_RELU', 'LSTM', 'GRU']:
-        model.rnn.flatten_parameters()
+checkpoint = torch.load(os.path.join(args.save, 'model.pt'))
+model.load_state_dict(checkpoint['model_state_dict'])
+# with open(os.path.join(args.save, 'model.pt'), 'rb') as f:
+#     model = torch.load(f)
+#     # after load the rnn params are not a continuous chunk of memory
+#     # this makes them a continuous chunk, and will speed up forward pass
+#     # Currently, only rnn model supports flatten_parameters function.
+#     if args.model in ['RNN_TANH', 'RNN_RELU', 'LSTM', 'GRU']:
+#         model.rnn.flatten_parameters()
 
 # Run on test data.
 test_loss = evaluate()
+torch.save(checkpoint, os.path.join(args.save, f"model{checkpoint['epoch']}.pt"))
 print('=' * 89)
 print('| End of training | test loss {:5.2f}'.format(
     test_loss))

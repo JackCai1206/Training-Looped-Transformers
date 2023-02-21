@@ -7,7 +7,7 @@ class LoopedTransformerModel(torch.nn.Module):
     def __init__(self, sim: SubleqSim, nhead, num_encoder_layers, dim_feedforward=2048, dropout=0.1, activation="relu"):
         super().__init__()
         encoder_layer = torch.nn.TransformerEncoderLayer(sim.col_dim, nhead, dim_feedforward, dropout, activation, batch_first=True)
-        self.encoder = torch.nn.TransformerEncoder(encoder_layer, num_encoder_layers)
+        self.encoder = torch.nn.TransformerEncoder(encoder_layer, num_encoder_layers, norm=None)
         # self.linear = torch.nn.Linear(d_model, d_model)
         # self.transformer = torch.nn.Transformer(d_model=sim.col_dim, nhead=nhead, num_encoder_layers=num_encoder_layers, dim_feedforward=dim_feedforward, dropout=dropout, activation=activation, batch_first=True)
         self.sim = sim
