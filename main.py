@@ -134,7 +134,7 @@ if args.optimizer == 'adam':
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
 else:
     optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=1e-5)
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.7, patience=100, verbose=True, min_lr=1e-6)
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=50, verbose=True, min_lr=1e-6)
 
 if args.resume is not None:
     model.load_state_dict(checkpoint['model_state_dict'])
