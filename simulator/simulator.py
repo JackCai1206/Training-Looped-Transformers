@@ -23,7 +23,7 @@ class SubleqSim():
     
     def create_state(self):
         N, s, m, n, log_n, d, inst_len = self.N, self.s, self.m, self.n, self.log_n, self.d, self.inst_len
-        self.X = torch.zeros(self.col_dim, n)
+        self.X = torch.ones(self.col_dim, n) * (-self.mag)
         PC = self.to_binary_col(torch.randint(s+m, n, (1,)), log_n)
         pos_enc = self.to_binary_col(torch.arange(0, n), log_n)
         scratch_ind = self.to_signed_binary(torch.cat([torch.ones(1, s), torch.zeros(1, n-s)], dim=1))
@@ -46,7 +46,24 @@ class SubleqSim():
         self.X[self.C_slice] = C
         return self.X
     
-    def step(self):
+    def step_copy(self):
+        # Copy the state
+        self.X = self.X.clone()
+        return self.X
+    
+    def step_PC_add1(self):
+        # Increment the PC
+        N, s, m, n, log_n, d, inst_len = self.N, self.s, self.m, self.n, self.log_n, self.d, self.inst_len
+        PC = self.X[self.PC_slice]
+        
+        PC_num = self.from_binary_col(PC)
+        PC_num = (PC_num + 1) % n
+        PC = self.to_binary_col(PC_num, log_n)
+
+        self.X[self.PC_slice] = PC
+        return self.X
+    
+    def step_subleq(self):
         N, s, m, n, log_n, d, inst_len = self.N, self.s, self.m, self.n, self.log_n, self.d, self.inst_len
         PC = self.X[self.PC_slice]
         pos_enc = self.X[self.pos_enc_slice]
@@ -71,6 +88,16 @@ class SubleqSim():
         self.X[self.C_slice] = C
 
         return self.X
+    
+    def step(self, task):
+        if task == 0:
+            return self.step_copy()
+        elif task == 1:
+            return self.step_PC_add1()
+        elif task == 2:
+            return self.step_subleq()
+        else:
+            raise ValueError("Invalid task")
     
     # Convert 0/1 binary matrix into -1000/1000 binary matrix
     def to_signed_binary(self, x: torch.Tensor):

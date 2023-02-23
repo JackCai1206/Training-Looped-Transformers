@@ -61,14 +61,17 @@ parser.add_argument('--dry_run', action='store_true',
 parser.add_argument('--grad_noise', type=float, default=5e-2)
 parser.add_argument('--block_diag', type=bool, default=True)
 parser.add_argument('--resume', type=str, default=None)
+parser.add_argument('--optimizer', type=str, default='adam')
 
 parser.add_argument('-N', type=int, default=4, required=False, help='Number of bits for integers stored in memory column')
 parser.add_argument('-s', type=int, default=4, required=False, help='Number of scratch pad columns')
 parser.add_argument('-m', type=int, default=4, required=False, help='Number of memory locations')
 parser.add_argument('-n', type=int, default=16, required=False, help='Total number of columns')
-parser.add_argument('--num_train', type=int, default=10000, required=False, help='Number of training data points')
-parser.add_argument('--num_valid', type=int, default=500, required=False, help='Number of validutation data points')
-parser.add_argument('--signed_mag', type=int, default=100, required=False, help='Magnitude of signed binary numbers')
+parser.add_argument('--num_train', type=int, default=100000, required=False, help='Number of training data points')
+parser.add_argument('--num_valid', type=int, default=5000, required=False, help='Number of validutation data points')
+parser.add_argument('--signed_mag', type=int, default=1, required=False, help='Magnitude of signed binary numbers')
+parser.add_argument('--task', type=int, default=2, required=False, help='Task for curriculum learning')
+parser.add_argument('--fix_set', type=bool, default=True, help="Fix the train/val set for each epoch.")
 
 parser.add_argument('--wandb', action='store_true', default=False)
 
@@ -126,8 +129,12 @@ model = model.LoopedTransformerModel(sim, args.nhead, args.nlayers, args.nhid, a
 criterion = nn.L1Loss(reduction='sum')
 if args.wandb:
     wandb.log({'src_mask': wandb.Image(model.src_mask.float())})
-optimizer = torch.optim.SGD(model.parameters(), lr=args.lr)
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.7, patience=100, verbose=True, weight_decay=1e-4)
+
+if args.optimizer == 'adam':
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
+else:
+    optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=1e-5)
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.7, patience=100, verbose=True, min_lr=1e-6)
 
 if args.resume is not None:
     model.load_state_dict(checkpoint['model_state_dict'])
@@ -171,8 +178,8 @@ def repackage_hidden(h):
 
 def quantize_data(data):
     # set data to signed_mag if it is close
-    data[data > 1] = args.signed_mag
-    data[data < -1] = -args.signed_mag
+    data[data > 0] = args.signed_mag
+    data[data < -0] = -args.signed_mag
     return data
 
 def evaluate():
@@ -181,7 +188,7 @@ def evaluate():
     total_loss = 0.
     with torch.no_grad():
         num_batches = args.num_valid // args.eval_batch_size
-        for i, (data, targets) in enumerate(get_data_iter(sim, args.eval_batch_size, num_batches, device)):
+        for i, (data, targets) in enumerate(get_data_iter(sim, args.eval_batch_size, num_batches, device, task=args.task, fix_set=args.fix_set)):
             output = model(data)
             output = quantize_data(output)
             total_loss += criterion(output, targets).item()
@@ -193,13 +200,14 @@ def evaluate():
     return total_loss / (num_batches)
 
 
-def train():
+def train(step):
     # Turn on training mode which enables dropout.
     model.train()
     total_loss = 0.
     start_time = time.time()
     num_batches = args.num_train // args.batch_size
-    for i, (data, targets) in enumerate(get_data_iter(sim, args.batch_size, num_batches, device)):
+    for i, (data, targets) in enumerate(get_data_iter(sim, args.batch_size, num_batches, device, task=args.task, fix_set=args.fix_set)):
+        step += 1
         i = i+1
         # Starting each batch, we detach the hidden state from how it was previously produced.
         # If we didn't, the model would try backpropagating all the way to start of the dataset.
@@ -226,7 +234,7 @@ def train():
             elapsed = time.time() - start_time
 
             if args.wandb:
-                wandb.log({'train_loss': cur_loss})
+                wandb.log({'train_loss': cur_loss}, step=step)
 
             print('| epoch {:3d} | {:5d}/{:5d} batches | lr {:02.2f} | ms/batch {:5.2f} | '
                     'loss {:5.2f}'.format(
@@ -252,18 +260,19 @@ best_val_loss = loss_resume
 
 # At any point you can hit Ctrl + C to break out of training early.
 try:
+    step = 0
     for epoch in range(epoch_resume, args.epochs+1):
         epoch_start_time = time.time()
-        train()
-        val_loss = evaluate()
+        train(step)
+        val_loss = evaluate(step)
         scheduler.step(val_loss)
         print('-' * 89)
         print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.8f} |'.format(epoch, (time.time() - epoch_start_time),
                                            val_loss))
         print('-' * 89)
         if args.wandb:
-            wandb.log({'val_loss': val_loss})
-            wandb.log({'lr': optimizer.param_groups[0]['lr']})
+            wandb.log({'val_loss': val_loss}, step=step)
+            wandb.log({'lr': optimizer.param_groups[0]['lr']}, step=step)
         # Save the model if the validation loss is the best we've seen so far.
         if not best_val_loss or val_loss < best_val_loss:
             torch.save({
@@ -273,7 +282,7 @@ try:
                 'scheduler_state_dict': scheduler.state_dict(),
                 'loss': val_loss,
                 'wandb_id': run_id if args.wandb else None
-            }, os.path.join(args.save, 'model.pt'))
+            }, os.path.join(args.save, f'model-task{args.task}.pt'))
             best_val_loss = val_loss
         # elif val_loss < best_val_loss + 0.01:
         #     pass
