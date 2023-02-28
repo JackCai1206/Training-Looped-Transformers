@@ -4,8 +4,21 @@ metric:
   name: validation_loss
   goal: minimize
 parameters:
-  learning_rate:
-    min: 0.0001
-    max: 10
+  lr:
+    values: [1.e-4, 1.3e-3, 1.e-2, 0.1, 1.0, 10.0]
   optimizer:
     values: ["adam", "sgd"]
+  loss:
+    values: ["mse", "l1"]
+  block_diag:
+    values: [True, False]
+  dropout:
+    values: [0.2, 0.4]
+  batch_size:
+    values: [1, 500, 1000]
+  betas:
+    values: [[0.9, 0.999], [0.8, 0.999], [0.7, 0.999]]
+  fix_set:
+    values: [True, False]
+  scheduler:
+    values: ["cosine", "plateau"]
