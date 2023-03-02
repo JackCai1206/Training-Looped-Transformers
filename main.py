@@ -29,7 +29,7 @@ parser.add_argument('--nhid', type=int, default=2048,
                     help='number of hidden units per layer')
 parser.add_argument('--nlayers', type=int, default=16,
                     help='number of layers')
-parser.add_argument('--lr', type=float, default=20,
+parser.add_argument('--lr', type=float, default=1e-5,
                     help='initial learning rate')
 parser.add_argument('--clip', type=float, default=0.25,
                     help='gradient clipping')
@@ -69,10 +69,10 @@ parser.add_argument('--warmup_steps', type=int, default=4000)
 parser.add_argument('--weight_decay', type=float, default=0.0)
 parser.add_argument('--betas', type=float, nargs=2, default=(0.9, 0.999))
 
-parser.add_argument('-N', type=int, default=4, required=False, help='Number of bits for integers stored in memory column')
-parser.add_argument('-s', type=int, default=4, required=False, help='Number of scratch pad columns')
-parser.add_argument('-m', type=int, default=4, required=False, help='Number of memory locations')
-parser.add_argument('-n', type=int, default=16, required=False, help='Total number of columns')
+parser.add_argument('-N', type=int, default=8, required=False, help='Number of bits for integers stored in memory column')
+parser.add_argument('-s', type=int, default=8, required=False, help='Number of scratch pad columns')
+parser.add_argument('-m', type=int, default=8, required=False, help='Number of memory locations')
+parser.add_argument('-n', type=int, default=32, required=False, help='Total number of columns')
 parser.add_argument('--num_train', type=int, default=100000, required=False, help='Number of training data points')
 parser.add_argument('--num_valid', type=int, default=5000, required=False, help='Number of validutation data points')
 parser.add_argument('--signed_mag', type=int, default=1, required=False, help='Magnitude of signed binary numbers')
@@ -169,7 +169,8 @@ def train(model, step, epoch, train_loader, optimizer, criterion, args):
             elapsed = time.time() - start_time
 
             if args.wandb:
-                wandb.log({'train_loss': cur_loss}, step=step, commit=False)
+                wandb.log({'train_loss': cur_loss,
+                            'lr': optimizer.param_groups[0]['lr']}, step=step, commit=False)
 
             print('| epoch {:3d} | {:5d}/{:5d} batches | lr {:f} | ms/batch {:5.2f} | '
                     'loss {:5.2f}'.format(
@@ -195,7 +196,7 @@ def main(args):
             args_dict = vars(args)
             args_dict.update(wandb.config)
             args = argparse.Namespace(**args_dict)
-        wandb.log({'args': str(args)})
+        wandb.config.update(args)
 
     if not os.path.exists(args.save):
         os.makedirs(args.save)
@@ -255,9 +256,9 @@ def main(args):
         optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=1e-5)
 
     if args.scheduler == 'cosine':
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=2, T_mult=1, eta_min=1e-6)
     elif args.scheduler == 'plateau':
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=50, verbose=True, min_lr=1e-6)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=10, verbose=True, min_lr=1e-6)
 
     if args.resume is not None:
         model.load_state_dict(checkpoint['model_state_dict'])
@@ -272,8 +273,8 @@ def main(args):
 
     args.num_eval_batches = args.num_valid // args.eval_batch_size
     args.num_train_batches = args.num_train // args.batch_size
-    train_loader = DataLoader(SubleqDataSet(sim, args.num_train, args.device, task=args.task, fix_set=args.fix_set), batch_size=args.batch_size, shuffle=False)
-    eval_loader = DataLoader(SubleqDataSet(sim, args.num_valid, args.device, task=args.task, fix_set=args.fix_set), batch_size=args.eval_batch_size, shuffle=False)
+    train_loader = DataLoader(SubleqDataSet(sim, args.num_train, args.device, task=args.task, fix_set=args.fix_set, mode="train"), batch_size=args.batch_size, shuffle=False)
+    eval_loader = DataLoader(SubleqDataSet(sim, args.num_valid, args.device, task=args.task, fix_set=args.fix_set, mode="val"), batch_size=args.eval_batch_size, shuffle=False)
 
     # Loop over epochs.
     best_val_loss = loss_resume
@@ -294,14 +295,16 @@ def main(args):
             epoch_start_time = time.time()
             step = train(model, step, epoch, train_loader, optimizer, criterion, args)
             val_loss = evaluate(model, step, eval_loader, criterion, args)
-            scheduler.step(val_loss)
+            if args.scheduler == 'plateau':
+                scheduler.step(val_loss)
+            elif args.scheduler == 'cosine':
+                scheduler.step()
             print('-' * 89)
             print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.8f} |'.format(epoch, (time.time() - epoch_start_time),
                                             val_loss))
             print('-' * 89)
             if args.wandb:
-                wandb.log({ 'val_loss': val_loss,
-                            'lr': optimizer.param_groups[0]['lr']}, step=step, commit=True)
+                wandb.log({ 'val_loss': val_loss}, step=step, commit=True)
             # Save the model if the validation loss is the best we've seen so far.
             if not best_val_loss or val_loss < best_val_loss:
                 torch.save({
@@ -335,7 +338,7 @@ def main(args):
     #         model.rnn.flatten_parameters()
 
     # Run on test data.
-    test_loss = evaluate(step)
+    test_loss = evaluate(model, step, eval_loader, criterion, args)
     torch.save(checkpoint, os.path.join(args.save, f"model{checkpoint['epoch']}.pt"))
     print('=' * 89)
     print('| End of training | test loss {:5.2f}'.format(
@@ -358,6 +361,6 @@ if __name__ == '__main__':
         with open(args.sweep_config) as f:
             sweep_config = yaml.load(f, Loader=yaml.FullLoader)
         sweep_id = wandb.sweep(sweep_config, project="training-looped-transformers")
-        wandb.agent(sweep_id, function=main_fac(args), count=1)
+        wandb.agent(sweep_id, function=main_fac(args))
     else:
         main(args)
