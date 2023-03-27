@@ -3,28 +3,28 @@ method: grid
 metric:
   name: val_loss
   goal: minimize
-early_terminate:
-  type: hyperband
-  min_iter: 3
-  eta: 3
+# early_terminate:
+#   type: hyperband
+#   min_iter: 3
+#   eta: 3
 parameters:
   lr:
-    values: [1.e-4, 1.3e-3, 1.e-2, 0.1]
+    values: [1.3e-3, 1.e-2]
   optimizer:
-    values: ["adam", "sgd"]
+    values: ["adam"]
   criterion:
     values: ["mse", "l1"]
   block_diag:
     values: [True, False]
   dropout:
-    values: [0, 0.2, 0.4]
+    values: [0.2]
   # batch_size:
   #   values: [500, 1000]
-  # betas:
-  #   values: [[0.9, 0.999], [0.8, 0.999], [0.7, 0.999]]
+  betas:
+    values: [[0.9, 0.999], [0.9, 0.98], [0.9, 0.8]]
   fix_set:
-    values: [True, False]
+    values: [True]
   scheduler:
-    values: ["cosine", "plateau"]
+    values: ["cosine"]
   weight_decay:
-    values: [0.0, 1.e-4, 1.e-3]
+    values: [0.0, 1.e-4]

@@ -18,15 +18,16 @@ torchrun
     --nlayers=16
     --nhead=4 
     --dropout=0 
-    --lr=0.0013
+    --lr=0.001
     --grad_noise=0 
     --block_diag=False
     --signed_mag=100 
     --optimizer=adam
-    --scheduler=plateau 
-    --task=2
+    --scheduler=cosine
+    --task=1
     --fix_set=True
-    --lr_finder
+    --weight_decay=1
+    # --lr_finder
     # --sweep_config=../sweep.yaml 
     # --sweep 
     --wandb 

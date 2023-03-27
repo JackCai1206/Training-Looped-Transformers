@@ -25,9 +25,11 @@ We use a python script to simulate `SUBLEQ` and generate the input/ouput pairs.
 ## Architecture
 We use a the transformer encoder in the [vanilla transfomer model](https://pytorch.org/docs/stable/generated/torch.nn.Transformer.html).
 
-## Things I have tried
-* Train set 10k pairs, val set 500. Each input/output pair is a randomly initialized memory and result of executing one step
-* Transformer encoder depth 1/2/4/9/16 layers, width (hidden dimension) 512, number of heads 1/2/4/8
-* L1/L2/ Huber loss
-* 0 --> -100, 1 --> +100
-
+## Current Setting
+* Train set 100k pairs, val set 5000. Each input/output pair is a randomly initialized memory and result of executing one step of SUBLEQ. There are 8 memory locations, 8 instructions, and 16 scratch pad locations.
+* Transformer encoder depth 16 layers, width (hidden dimension) 1024, number of heads 4
+* L1/L2/Huber loss
+* Scale up the loss by mapping 0 --> -100, 1 --> +100
+* Quantize the model output `x > eps --> x = 100`, `x < eps --> -100`
+* Optmizer Adam, SGD
+* LR schedule CosineRestartWithWarmUp, ReduceLROnPlateau

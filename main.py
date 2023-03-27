@@ -69,10 +69,12 @@ parser.add_argument('--warmup_steps', type=int, default=4000)
 parser.add_argument('--weight_decay', type=float, default=0.0)
 parser.add_argument('--betas', type=float, nargs=2, default=(0.9, 0.999))
 
+parser.add_argument('--sim_type', type=str, default='v2')
 parser.add_argument('-N', type=int, default=8, required=False, help='Number of bits for integers stored in memory column')
 parser.add_argument('-s', type=int, default=8, required=False, help='Number of scratch pad columns')
 parser.add_argument('-m', type=int, default=8, required=False, help='Number of memory locations')
 parser.add_argument('-n', type=int, default=32, required=False, help='Total number of columns')
+
 parser.add_argument('--num_train', type=int, default=100000, required=False, help='Number of training data points')
 parser.add_argument('--num_valid', type=int, default=5000, required=False, help='Number of validutation data points')
 parser.add_argument('--signed_mag', type=int, default=1, required=False, help='Magnitude of signed binary numbers')
@@ -115,8 +117,8 @@ def repackage_hidden(h):
 
 def quantize_data(data):
     # set data to signed_mag if it is close
-    data[data > 1] = args.signed_mag
-    data[data < -1] = -args.signed_mag
+    data[data > 0.001] = args.signed_mag
+    data[data < -0.001] = -args.signed_mag
     return data
 
 def evaluate(model, step, eval_loader, criterion, args):
@@ -255,10 +257,12 @@ def main(args):
     elif args.optimizer == 'sgd':
         optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=1e-5)
 
-    if args.scheduler == 'cosine':
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=2, T_mult=1, eta_min=1e-6)
+    if args.lr_finder:
+        scheduler = None
+    elif args.scheduler == 'cosine':
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=100, T_mult=2, eta_min=1e-6)
     elif args.scheduler == 'plateau':
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=10, verbose=True, min_lr=1e-6)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=20, verbose=True, min_lr=1e-6)
 
     if args.resume is not None:
         model.load_state_dict(checkpoint['model_state_dict'])
@@ -282,8 +286,8 @@ def main(args):
 
     if args.lr_finder:
         lr_finder = LRFinder(model, optimizer, criterion, device="cuda")
-        lr_finder.range_test(train_loader, val_loader=eval_loader, start_lr=1e-10, end_lr=1, num_iter=10000, step_mode="linear")
-        plt = lr_finder.plot(log_lr=False)[0]
+        lr_finder.range_test(train_loader, val_loader=eval_loader, start_lr=1e-10, end_lr=1, num_iter=10000, step_mode="exp")
+        plt = lr_finder.plot(log_lr=False)
         if args.wandb:
             wandb.log({ 'lr_finder': wandb.Image(plt)})
         lr_finder.reset()
@@ -314,7 +318,7 @@ def main(args):
                     'scheduler_state_dict': scheduler.state_dict(),
                     'loss': val_loss,
                     'wandb_id': run_id if args.wandb else None
-                }, os.path.join(args.save, f'model-task{args.task}.pt'))
+                }, os.path.join(args.save, f'model-best-task-{args.task}.pt'))
                 best_val_loss = val_loss
             # elif val_loss < best_val_loss + 0.01:
             #     pass
@@ -327,7 +331,7 @@ def main(args):
         print('Exiting from training early')
 
     # Load the best saved model.
-    checkpoint = torch.load(os.path.join(args.save, f'model-task{args.task}.pt'))
+    checkpoint = torch.load(os.path.join(args.save, f'model-best-task-{args.task}.pt'))
     model.load_state_dict(checkpoint['model_state_dict'])
     # with open(os.path.join(args.save, 'model.pt'), 'rb') as f:
     #     model = torch.load(f)
@@ -339,7 +343,7 @@ def main(args):
 
     # Run on test data.
     test_loss = evaluate(model, step, eval_loader, criterion, args)
-    torch.save(checkpoint, os.path.join(args.save, f"model{checkpoint['epoch']}.pt"))
+    torch.save(checkpoint, os.path.join(args.save, f"model-{checkpoint['epoch']}.pt"))
     print('=' * 89)
     print('| End of training | test loss {:5.2f}'.format(
         test_loss))

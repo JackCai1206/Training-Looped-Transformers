@@ -26,7 +26,7 @@ class SubleqDataSet(Dataset):
                 if fix_set:
                     self.data_cache[mode][i] = x
                     self.targets_cache[mode][i] = y
-            yield self.data_cache[mode][i], self.targets_cache[mode][i] 
+            yield x, y
             i += 1
 
     def __len__(self):
@@ -34,3 +34,12 @@ class SubleqDataSet(Dataset):
     
     def __getitem__(self, idx):
         return next(self.data_iter)
+    
+
+if __name__ == "__main__":
+    sim = SubleqSim(1, 1, 1, 1, 1, 1, 1)
+    dataset = SubleqDataSet(sim, 10, "cpu")
+    dataloader = DataLoader(dataset, batch_size=2, shuffle=True)
+    for x, y in dataloader:
+        print(x.shape, y.shape)
+        break
