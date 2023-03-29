@@ -13,7 +13,9 @@ from torch.utils.data.dataloader import DataLoader
 import yaml
 
 from data import SubleqDataSet
+from data.data import SubleqDataSetV2
 from model import LoopedTransformerModel
+from model.model import LoopedTransformerModelV2
 import simulator
 
 import wandb
@@ -62,9 +64,9 @@ parser.add_argument('--dry_run', action='store_true',
 parser.add_argument('--grad_noise', type=float, default=5e-2)
 parser.add_argument('--block_diag', type=bool, default=True)
 parser.add_argument('--resume', type=str, default=None)
-parser.add_argument('--optimizer', type=str, default='adam')
-parser.add_argument('--criterion', type=str, default='l1')
-parser.add_argument('--scheduler', type=str, default='cosine')
+parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'sgd'])
+parser.add_argument('--criterion', type=str, default='l1', choices=['l1', 'mse', 'ce'])
+parser.add_argument('--scheduler', type=str, default='cosine', choices=['cosine', 'plateau'])
 parser.add_argument('--warmup_steps', type=int, default=4000)
 parser.add_argument('--weight_decay', type=float, default=0.0)
 parser.add_argument('--betas', type=float, nargs=2, default=(0.9, 0.999))
@@ -128,13 +130,24 @@ def evaluate(model, step, eval_loader, criterion, args):
     with torch.no_grad():
         for i, (data, targets) in enumerate(eval_loader):
             output = model(data)
-            output = quantize_data(output)
+            if args.sim_type == 'v2':
+                pass
+            else:
+                output = quantize_data(output)
             total_loss += criterion(output, targets).item()
             if i == 0 and args.wandb:
-                wandb.log({ 'example_input': wandb.Image(data[0].T.detach().cpu().numpy()),
-                            'example_output': wandb.Image(output[0].T.detach().cpu().numpy()),
-                            'example_target': wandb.Image(targets[0].T.detach().cpu().numpy()),
-                            'register_diff': wandb.Image(torch.abs(output[0] - targets[0]).T.detach().cpu().numpy())}, step=step, commit=False)
+                if args.sim_type == 'v2':
+                    # do not use wandb.Image
+                    wandb.log({ 'example_input': wandb.log(data[0].T.detach().cpu().numpy()),
+                                'example_output': wandb.log(output[0].T.detach().cpu().numpy()),
+                                'example_target': wandb.log(targets[0].T.detach().cpu().numpy()),
+                                # 'register_diff': wandb.log(torch.abs(output[0] - targets[0]).T.detach().cpu().numpy())
+                            }, step=step, commit=False)
+                else:
+                    wandb.log({ 'example_input': wandb.Image(data[0].T.detach().cpu().numpy()),
+                                'example_output': wandb.Image(output[0].T.detach().cpu().numpy()),
+                                'example_target': wandb.Image(targets[0].T.detach().cpu().numpy()),
+                                'register_diff': wandb.Image(torch.abs(output[0] - targets[0]).T.detach().cpu().numpy())}, step=step, commit=False)
     return total_loss / (args.num_eval_batches)
 
 
@@ -144,13 +157,18 @@ def train(model, step, epoch, train_loader, optimizer, criterion, args):
     total_loss = 0.
     start_time = time.time()
     for i, (data, targets) in enumerate(train_loader):
+        print(torch.cuda.memory_allocated())
         step += 1
         i = i+1
         # Starting each batch, we detach the hidden state from how it was previously produced.
         # If we didn't, the model would try backpropagating all the way to start of the dataset.
         optimizer.zero_grad()
         output = model(data)
-        output = quantize_data(output)
+        if args.sim_type == 'v2':
+            pass
+        else:
+            output = quantize_data(output)
+        # print(output.shape, targets.shape)
         loss = criterion(output, targets)
         loss.backward()
         # add gaussian noise to gradients
@@ -159,7 +177,7 @@ def train(model, step, epoch, train_loader, optimizer, criterion, args):
                 p.grad += torch.randn(p.grad.shape).to(args.device) * args.grad_noise
 
         # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
-        # torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
         optimizer.step()
         # for p in model.parameters():
         #     p.data.add_(p.grad, alpha=-lr)
@@ -232,19 +250,32 @@ def main(args):
     # print('train_data', train_data.shape)
     # print('valid_data', valid_data.shape)
     # print('data_config', data_config)
-    sim = simulator.SubleqSim(args.N, args.s, args.m, args.n, args.signed_mag, block_diag=args.block_diag)
+    if args.sim_type == 'v2':
+        max_val = 2**args.N
+        num_mem = args.m
+        num_inst = args.n - args.m - args.s 
+        sim = simulator.SubleqSimV2(max_val, num_mem, num_inst)
+    else:
+        sim = simulator.SubleqSim(args.N, args.s, args.m, args.n, args.signed_mag, block_diag=args.block_diag)
 
     ###############################################################################
     # Build the model
     ###############################################################################
 
-    model = LoopedTransformerModel(sim, args.nhead, args.nlayers, args.nhid, args.dropout).to(args.device)
+    if args.sim_type == 'v2':
+        model = LoopedTransformerModelV2(sim, args.nhead, args.nlayers, args.nhid, args.dropout).to(args.device)
+    else:
+        model = LoopedTransformerModel(sim, args.nhead, args.nlayers, args.nhid, args.dropout).to(args.device)
+
     if args.criterion == 'mse':
         criterion = nn.MSELoss(reduction='mean')
     elif args.criterion == 'l1':
         criterion = nn.L1Loss(reduction='mean')
+    elif args.criterion == 'ce':
+        criterion = nn.CrossEntropyLoss(reduction='mean')
+
     if args.wandb:
-        wandb.log({'src_mask': wandb.Image(model.src_mask.float())})
+        # wandb.log({'src_mask': wandb.Image(model.src_mask.float())})
         wandb.watch(model, log='all')
 
     trainable_params = sum(
@@ -277,8 +308,12 @@ def main(args):
 
     args.num_eval_batches = args.num_valid // args.eval_batch_size
     args.num_train_batches = args.num_train // args.batch_size
-    train_loader = DataLoader(SubleqDataSet(sim, args.num_train, args.device, task=args.task, fix_set=args.fix_set, mode="train"), batch_size=args.batch_size, shuffle=False)
-    eval_loader = DataLoader(SubleqDataSet(sim, args.num_valid, args.device, task=args.task, fix_set=args.fix_set, mode="val"), batch_size=args.eval_batch_size, shuffle=False)
+    if args.sim_type == 'v2':
+        train_loader = DataLoader(SubleqDataSetV2(sim, args.num_train, args.device, task=args.task, fix_set=args.fix_set, mode="train"), batch_size=args.batch_size, shuffle=False)
+        eval_loader = DataLoader(SubleqDataSetV2(sim, args.num_valid, args.device, task=args.task, fix_set=args.fix_set, mode="val"), batch_size=args.eval_batch_size, shuffle=False)
+    else:
+        train_loader = DataLoader(SubleqDataSet(sim, args.num_train, args.device, task=args.task, fix_set=args.fix_set, mode="train"), batch_size=args.batch_size, shuffle=False)
+        eval_loader = DataLoader(SubleqDataSet(sim, args.num_valid, args.device, task=args.task, fix_set=args.fix_set, mode="val"), batch_size=args.eval_batch_size, shuffle=False)
 
     # Loop over epochs.
     best_val_loss = loss_resume
@@ -286,7 +321,7 @@ def main(args):
 
     if args.lr_finder:
         lr_finder = LRFinder(model, optimizer, criterion, device="cuda")
-        lr_finder.range_test(train_loader, val_loader=eval_loader, start_lr=1e-10, end_lr=1, num_iter=10000, step_mode="exp")
+        lr_finder.range_test(train_loader, val_loader=eval_loader, start_lr=1e-10, end_lr=1, num_iter=1000, step_mode="exp")
         plt = lr_finder.plot(log_lr=False)
         if args.wandb:
             wandb.log({ 'lr_finder': wandb.Image(plt)})

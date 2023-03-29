@@ -14,23 +14,24 @@ torchrun
     --save=/data/hulab/zcai75/looped-transformers/checkpoints/ 
     --batch_size=1000 
     --eval_batch_size=1000 
-    --nhid=1024 
-    --nlayers=16
+    --nhid=512 
+    --nlayers=12
     --nhead=4 
-    --dropout=0 
-    --lr=0.001
+    --dropout=0.1 
+    --lr=3.28E-05
     --grad_noise=0 
     --block_diag=False
     --signed_mag=100 
     --optimizer=adam
     --scheduler=cosine
+    --criterion=ce
     --task=1
     --fix_set=True
     --weight_decay=1
     # --lr_finder
     # --sweep_config=../sweep.yaml 
     # --sweep 
-    --wandb 
+    # --wandb 
     # --resume=/data/hulab/zcai75/looped-transformers/checkpoints/model.pt 
 )
 

@@ -1,7 +1,30 @@
+import math
 import torch
 import torch.nn as nn
 
 from simulator import SubleqSim
+from simulator.simulator_v2 import SubleqSimV2
+
+class PositionalEncoding(nn.Module):
+
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
+        super().__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(max_len, 1, d_model)
+        pe[:, 0, 0::2] = torch.sin(position * div_term)
+        pe[:, 0, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: Tensor, shape [seq_len, batch_size, embedding_dim]
+        """
+        x = x + self.pe[:x.size(0)]
+        return self.dropout(x)
 
 class LoopedTransformerModel(nn.Module):
     r"""Looped transformer model. Takes in the current machine state and return the next machine state."""
@@ -39,34 +62,30 @@ class LoopedTransformerModel(nn.Module):
 
 class LoopedTransformerModelV2(nn.Module):
     r"""Looped transformer model. Takes in the current machine state and return the next machine state."""
-    def __init__(self, sim: SubleqSim, nhead, num_encoder_layers, dim_feedforward=2048, dropout=0.1, activation="relu"):
+    def __init__(self, sim: SubleqSimV2, nhead, num_encoder_layers, dim_feedforward=2048, dropout=0.1, activation="relu"):
         super().__init__()
-        encoder_layer = nn.TransformerEncoderLayer(sim.col_dim, nhead, dim_feedforward, dropout, activation, batch_first=True)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_encoder_layers)
         self.d_model = sim.col_dim
-        self.encoder = nn.Embedding(ntoken, self.d_model)
         self.sim = sim
         self.nhead = nhead
         self.num_encoder_layers = num_encoder_layers
-        self.decoder = nn.Linear(self.d_model, ntoken)
 
-        N, s, m, n, log_n, d, inst_len = self.sim.N, self.sim.s, self.sim.m, self.sim.n, self.sim.log_n, self.sim.d, self.sim.inst_len
-        src_mask = torch.ones(n, n, dtype=torch.bool)
-        # memory can attend to instructions
-        src_mask[s:s+m, s+m:n] = False
-        # memory can attend to PC
-        src_mask[s:s+m, 0] = False
-        # instructions can attend to PC
-        src_mask[s+m:n, 0] = False
-        # scratch can attend to everything
-        src_mask[0:s, :] = False
-        self.src_mask = src_mask
+        self.pos_encoder = PositionalEncoding(self.d_model, dropout)
+        encoder_layer = nn.TransformerEncoderLayer(sim.col_dim, nhead, dim_feedforward, dropout, activation, batch_first=True)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_encoder_layers)
+        self.encoder = nn.Embedding(sim.num_tokens, self.d_model)
+        self.decoder = nn.Linear(self.d_model, sim.num_tokens)
+        self.init_weights()
+    
+    def init_weights(self):
+        initrange = 0.1
+        self.encoder.weight.data.uniform_(-initrange, initrange)
+        self.decoder.bias.data.zero_()
+        self.decoder.weight.data.uniform_(-initrange, initrange)
     
     def forward(self, src, src_mask=None, src_key_padding_mask=None):
-        src_mask = self.src_mask.to(src.device)
-        # print(src.shape)
-        output = self.encoder(src, src_mask, src_key_padding_mask)
-        # tgt = src
-        # output = self.transformer(src, tgt,src_mask, src_key_padding_mask)
-        # print(output.shape)
+        src = self.encoder(src) * math.sqrt(self.d_model)
+        src = self.pos_encoder(src)
+        output = self.transformer_encoder(src, src_mask)
+        output = self.decoder(output)
+
         return output
