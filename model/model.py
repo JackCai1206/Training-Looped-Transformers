@@ -1,6 +1,8 @@
 import math
 import torch
 import torch.nn as nn
+from model.TransformerEncoderLayerNoLayerNorm import *
+from model.transformer import TransformerBlock
 
 from simulator import SubleqSim
 from simulator.simulator_v2 import SubleqSimV2
@@ -13,17 +15,17 @@ class PositionalEncoding(nn.Module):
 
         position = torch.arange(max_len).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
-        pe = torch.zeros(max_len, 1, d_model)
-        pe[:, 0, 0::2] = torch.sin(position * div_term)
-        pe[:, 0, 1::2] = torch.cos(position * div_term)
+        pe = torch.zeros(1, max_len, d_model)
+        pe[0, :, 0::2] = torch.sin(position * div_term)
+        pe[0, :, 1::2] = torch.cos(position * div_term)
         self.register_buffer('pe', pe)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            x: Tensor, shape [seq_len, batch_size, embedding_dim]
+            x: Tensor, shape [batch_size, seq_len, embedding_dim]
         """
-        x = x + self.pe[:x.size(0)]
+        x = x + self.pe[:, :x.size(1), :]
         return self.dropout(x)
 
 class LoopedTransformerModel(nn.Module):
@@ -62,16 +64,17 @@ class LoopedTransformerModel(nn.Module):
 
 class LoopedTransformerModelV2(nn.Module):
     r"""Looped transformer model. Takes in the current machine state and return the next machine state."""
-    def __init__(self, sim: SubleqSimV2, nhead, num_encoder_layers, dim_feedforward=2048, dropout=0.1, activation="relu"):
+    def __init__(self, sim: SubleqSimV2, emsize, nhead, num_encoder_layers, dim_feedforward=2048, dropout=0.1, activation="relu"):
         super().__init__()
-        self.d_model = sim.col_dim
+        self.d_model = emsize
         self.sim = sim
         self.nhead = nhead
         self.num_encoder_layers = num_encoder_layers
 
         self.pos_encoder = PositionalEncoding(self.d_model, dropout)
-        encoder_layer = nn.TransformerEncoderLayer(sim.col_dim, nhead, dim_feedforward, dropout, activation, batch_first=True)
+        encoder_layer = TransformerEncoderLayerNoLayerNorm(self.d_model, nhead, dim_feedforward, dropout, activation, batch_first=True)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_encoder_layers)
+        # self.blocks = nn.ModuleList([TransformerBlock(d_model=self.d_model, d_mlp=dim_feedforward, d_head=self.d_model//self.nhead, num_heads=self.nhead, n_ctx=sim.num_tokens, act_type=activation, attn_only=False, model=[self]) for i in range(num_encoder_layers)])
         self.encoder = nn.Embedding(sim.num_tokens, self.d_model)
         self.decoder = nn.Linear(self.d_model, sim.num_tokens)
         self.init_weights()
@@ -83,9 +86,14 @@ class LoopedTransformerModelV2(nn.Module):
         self.decoder.weight.data.uniform_(-initrange, initrange)
     
     def forward(self, src, src_mask=None, src_key_padding_mask=None):
-        src = self.encoder(src) * math.sqrt(self.d_model)
+        # src = self.encoder(src) * math.sqrt(self.d_model)
+        src = self.encoder(src)
         src = self.pos_encoder(src)
         output = self.transformer_encoder(src, src_mask)
+        # x = src
+        # for block in self.blocks:
+        #     x = block(x)
+        # output = x
         output = self.decoder(output)
 
         return output

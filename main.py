@@ -25,8 +25,8 @@ parser.add_argument('--data', type=str, default='.',
                     help='location of the data')
 parser.add_argument('--model', type=str, default='Transformer',
                     help='type of network')
-# parser.add_argument('--emsize', type=int, default=200,
-#                     help='size of word embeddings')
+parser.add_argument('--emsize', type=int, default=200,
+                    help='size of word embeddings')
 parser.add_argument('--nhid', type=int, default=2048,
                     help='number of hidden units per layer')
 parser.add_argument('--nlayers', type=int, default=16,
@@ -123,11 +123,13 @@ def quantize_data(data):
     data[data < -0.001] = -args.signed_mag
     return data
 
-def evaluate(model, step, eval_loader, criterion, args):
+def evaluate(model, step, eval_loader, criterion, sim, args):
     # Turn on evaluation mode which disables dropout.
     model.eval()
     total_loss = 0.
     with torch.no_grad():
+        num_el = 0
+        num_correct = 0
         for i, (data, targets) in enumerate(eval_loader):
             output = model(data)
             if args.sim_type == 'v2':
@@ -135,19 +137,40 @@ def evaluate(model, step, eval_loader, criterion, args):
             else:
                 output = quantize_data(output)
             total_loss += criterion(output, targets).item()
+            # calculate accuracy if v2
+            if args.sim_type == 'v2':
+                output = torch.argmax(output, dim=-1)
+                targets = torch.argmax(targets, dim=-1)
+                # num_correct += torch.sum(output[:, :-(sim.num_inst + 1)] == targets[:, :-(sim.num_inst + 1)]).item()
+                # num_el += output.shape[0] * (output.shape[1] - sim.num_inst - 1)
+                num_correct += torch.sum(torch.prod(output == targets, dim=-1)).item()
+                num_el += output.shape[0]
+
+            if i == 0:
+                print(sim.detok(data[0].detach().cpu().numpy()))
+                print(sim.detok(output[0].detach().cpu().numpy()))
+                print(sim.detok(targets[0].detach().cpu().numpy()))
             if i == 0 and args.wandb:
                 if args.sim_type == 'v2':
-                    # do not use wandb.Image
-                    wandb.log({ 'example_input': wandb.log(data[0].T.detach().cpu().numpy()),
-                                'example_output': wandb.log(output[0].T.detach().cpu().numpy()),
-                                'example_target': wandb.log(targets[0].T.detach().cpu().numpy()),
-                                # 'register_diff': wandb.log(torch.abs(output[0] - targets[0]).T.detach().cpu().numpy())
-                            }, step=step, commit=False)
+                    # do not use wandb.Image for text
+                    sent_len = data[0].shape[0]
+                    # print(sim.detok(torch.argmax(output[0], dim=1).detach().cpu().numpy()))
+                    # tb = wandb.Table(columns=[i for i in range(sent_len)], data=[
+                    #     sim.detok(data[0].detach().cpu().numpy()).split(' '),
+                    #     sim.detok(output[0].detach().cpu().numpy()).split(' '),
+                    #     sim.detok(targets[0].detach().cpu().numpy()).split(' ')
+                    # ])
+                    # wandb.log({ 'example': tb}, step=step, commit=False)
                 else:
                     wandb.log({ 'example_input': wandb.Image(data[0].T.detach().cpu().numpy()),
                                 'example_output': wandb.Image(output[0].T.detach().cpu().numpy()),
                                 'example_target': wandb.Image(targets[0].T.detach().cpu().numpy()),
                                 'register_diff': wandb.Image(torch.abs(output[0] - targets[0]).T.detach().cpu().numpy())}, step=step, commit=False)
+    
+    if args.sim_type == 'v2':
+        print('Test Accuracy: {:f}'.format(num_correct / num_el))
+        if args.wandb:
+            wandb.log({ 'Test Accuracy': num_correct / num_el}, step=step, commit=False)
     return total_loss / (args.num_eval_batches)
 
 
@@ -156,8 +179,10 @@ def train(model, step, epoch, train_loader, optimizer, criterion, args):
     model.train()
     total_loss = 0.
     start_time = time.time()
+    num_el = 0
+    num_correct = 0
     for i, (data, targets) in enumerate(train_loader):
-        print(torch.cuda.memory_allocated())
+        # print('MEM: ', torch.cuda.memory_allocated())
         step += 1
         i = i+1
         # Starting each batch, we detach the hidden state from how it was previously produced.
@@ -184,7 +209,16 @@ def train(model, step, epoch, train_loader, optimizer, criterion, args):
 
         total_loss += loss.item()
 
-        if i % args.log_interval == 0 and i > 0:
+        # calculate accuracy if v2
+        if args.sim_type == 'v2':
+            output = torch.argmax(output, dim=-1)
+            targets = torch.argmax(targets, dim=-1)
+            # num_correct += torch.sum(output[:, :-(sim.num_inst + 1)] == targets[:, :-(sim.num_inst + 1)]).item()
+            # num_el += output.shape[0] * (output.shape[1] - sim.num_inst - 1)
+            num_correct += torch.sum(torch.prod(output == targets, dim=-1)).item()
+            num_el += output.shape[0]
+
+        if (i % args.log_interval == 0 and i > 0) or i == args.num_train_batches:
             cur_loss = total_loss / args.log_interval
             elapsed = time.time() - start_time
 
@@ -193,13 +227,20 @@ def train(model, step, epoch, train_loader, optimizer, criterion, args):
                             'lr': optimizer.param_groups[0]['lr']}, step=step, commit=False)
 
             print('| epoch {:3d} | {:5d}/{:5d} batches | lr {:f} | ms/batch {:5.2f} | '
-                    'loss {:5.2f}'.format(
+                    'loss {:f}'.format(
                 epoch, i, args.num_train_batches, optimizer.param_groups[0]['lr'],
                 elapsed * 1000 / args.log_interval, cur_loss))
             total_loss = 0
             start_time = time.time()
+
         if args.dry_run:
             break
+    
+    if args.sim_type == 'v2':
+        print('Train Accuracy: {:f}'.format(num_correct / num_el))
+        if args.wandb:
+            wandb.log({ 'Train Accuracy': num_correct / num_el}, step=step, commit=False)
+
     return step
 
 # def export_onnx(path, batch_size, seq_len):
@@ -263,7 +304,7 @@ def main(args):
     ###############################################################################
 
     if args.sim_type == 'v2':
-        model = LoopedTransformerModelV2(sim, args.nhead, args.nlayers, args.nhid, args.dropout).to(args.device)
+        model = LoopedTransformerModelV2(sim, args.emsize, args.nhead, args.nlayers, args.nhid, args.dropout).to(args.device)
     else:
         model = LoopedTransformerModel(sim, args.nhead, args.nlayers, args.nhid, args.dropout).to(args.device)
 
@@ -284,9 +325,9 @@ def main(args):
     print('Trainable parameters', trainable_params)
 
     if args.optimizer == 'adam':
-        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5, betas=args.betas)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay, betas=args.betas)
     elif args.optimizer == 'sgd':
-        optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=1e-5)
+        optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     if args.lr_finder:
         scheduler = None
@@ -333,7 +374,7 @@ def main(args):
         for epoch in range(epoch_resume, args.epochs+1):
             epoch_start_time = time.time()
             step = train(model, step, epoch, train_loader, optimizer, criterion, args)
-            val_loss = evaluate(model, step, eval_loader, criterion, args)
+            val_loss = evaluate(model, step, eval_loader, criterion, sim, args)
             if args.scheduler == 'plateau':
                 scheduler.step(val_loss)
             elif args.scheduler == 'cosine':
@@ -377,7 +418,7 @@ def main(args):
     #         model.rnn.flatten_parameters()
 
     # Run on test data.
-    test_loss = evaluate(model, step, eval_loader, criterion, args)
+    test_loss = evaluate(model, step, eval_loader, criterion, sim, args)
     torch.save(checkpoint, os.path.join(args.save, f"model-{checkpoint['epoch']}.pt"))
     print('=' * 89)
     print('| End of training | test loss {:5.2f}'.format(

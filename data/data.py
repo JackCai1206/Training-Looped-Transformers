@@ -24,6 +24,7 @@ class SubleqDataSet(Dataset):
                 sim.create_state()
                 x = torch.clone(sim.X).T.to(device)
                 y = torch.clone(sim.step(task)).T.to(device)
+                print(x,y)
                 if fix_set:
                     self.data_cache[mode][i] = x
                     self.targets_cache[mode][i] = y
@@ -46,6 +47,7 @@ class SubleqDataSetV2(Dataset):
 
     def get_data_iter(self, sim: SubleqSimV2, num_data, device, mode="train", task=2, fix_set=True):
         i = 0
+        # sim.create_state()
         while True:
             i = i % num_data
             if fix_set and i in self.data_cache[mode]:
@@ -53,6 +55,7 @@ class SubleqDataSetV2(Dataset):
                 y = self.targets_cache[mode][i]
             else:
                 x = torch.clone(sim.create_state()).to(device)
+                # x = torch.clone(sim.tokenize_state()).to(device)
                 y = torch.clone(sim.step()).to(device)
                 y = nn.functional.one_hot(y, sim.num_tokens).float()
                 if fix_set:
