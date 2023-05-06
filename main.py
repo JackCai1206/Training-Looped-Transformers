@@ -171,7 +171,7 @@ def evaluate(model, step, eval_loader, criterion, sim, args):
         print('Test Accuracy: {:f}'.format(num_correct / num_el))
         if args.wandb:
             wandb.log({ 'Test Accuracy': num_correct / num_el}, step=step, commit=False)
-    return total_loss / (args.num_eval_batches)
+    return total_loss / (args.num_eval_batches), num_correct / num_el
 
 
 def train(model, step, epoch, train_loader, optimizer, criterion, args):
@@ -241,7 +241,7 @@ def train(model, step, epoch, train_loader, optimizer, criterion, args):
         if args.wandb:
             wandb.log({ 'Train Accuracy': num_correct / num_el}, step=step, commit=False)
 
-    return step
+    return step, num_correct / num_el
 
 # def export_onnx(path, batch_size, seq_len):
 #     print('The model is also exported in ONNX format at {}.'.format(os.path.realpath(args.onnx_export)))
@@ -295,18 +295,19 @@ def main(args):
         max_val = 2**args.N
         num_mem = args.m
         num_inst = args.n - args.m - args.s 
-        sim = simulator.SubleqSimV2(max_val, num_mem, num_inst)
+        train_sim = simulator.SubleqSimV2(max_val, num_mem, num_inst)
+        test_sim = simulator.SubleqSimV2(max_val, num_mem, num_inst)
     else:
-        sim = simulator.SubleqSim(args.N, args.s, args.m, args.n, args.signed_mag, block_diag=args.block_diag)
+        train_sim = test_sim = simulator.SubleqSim(args.N, args.s, args.m, args.n, args.signed_mag, block_diag=args.block_diag)
 
     ###############################################################################
     # Build the model
     ###############################################################################
 
     if args.sim_type == 'v2':
-        model = LoopedTransformerModelV2(sim, args.emsize, args.nhead, args.nlayers, args.nhid, args.dropout).to(args.device)
+        model = LoopedTransformerModelV2(train_sim, args.emsize, args.nhead, args.nlayers, args.nhid, args.dropout).to(args.device)
     else:
-        model = LoopedTransformerModel(sim, args.nhead, args.nlayers, args.nhid, args.dropout).to(args.device)
+        model = LoopedTransformerModel(train_sim, args.nhead, args.nlayers, args.nhid, args.dropout).to(args.device)
 
     if args.criterion == 'mse':
         criterion = nn.MSELoss(reduction='mean')
@@ -350,11 +351,13 @@ def main(args):
     args.num_eval_batches = args.num_valid // args.eval_batch_size
     args.num_train_batches = args.num_train // args.batch_size
     if args.sim_type == 'v2':
-        train_loader = DataLoader(SubleqDataSetV2(sim, args.num_train, args.device, task=args.task, fix_set=args.fix_set, mode="train"), batch_size=args.batch_size, shuffle=False)
-        eval_loader = DataLoader(SubleqDataSetV2(sim, args.num_valid, args.device, task=args.task, fix_set=args.fix_set, mode="val"), batch_size=args.eval_batch_size, shuffle=False)
+        train_dataset = SubleqDataSetV2(train_sim, args.num_train, args.device, task=args.task, fix_set=args.fix_set, mode="train")
+        val_dataset = SubleqDataSetV2(test_sim, args.num_valid, args.device, task=args.task, fix_set=args.fix_set, mode="val")
+        train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=False)
+        eval_loader = DataLoader(val_dataset, batch_size=args.eval_batch_size, shuffle=False)
     else:
-        train_loader = DataLoader(SubleqDataSet(sim, args.num_train, args.device, task=args.task, fix_set=args.fix_set, mode="train"), batch_size=args.batch_size, shuffle=False)
-        eval_loader = DataLoader(SubleqDataSet(sim, args.num_valid, args.device, task=args.task, fix_set=args.fix_set, mode="val"), batch_size=args.eval_batch_size, shuffle=False)
+        train_loader = DataLoader(SubleqDataSet(train_sim, args.num_train, args.device, task=args.task, fix_set=args.fix_set, mode="train"), batch_size=args.batch_size, shuffle=False)
+        eval_loader = DataLoader(SubleqDataSet(test_sim, args.num_valid, args.device, task=args.task, fix_set=args.fix_set, mode="val"), batch_size=args.eval_batch_size, shuffle=False)
 
     # Loop over epochs.
     best_val_loss = loss_resume
@@ -373,8 +376,12 @@ def main(args):
     try:
         for epoch in range(epoch_resume, args.epochs+1):
             epoch_start_time = time.time()
-            step = train(model, step, epoch, train_loader, optimizer, criterion, args)
-            val_loss = evaluate(model, step, eval_loader, criterion, sim, args)
+            step, train_acc = train(model, step, epoch, train_loader, optimizer, criterion, args)
+            val_loss, val_acc = evaluate(model, step, eval_loader, criterion, test_sim, args)
+            if train_acc > 0.99:
+                train_sim.set_curriculum_num(train_sim.curriculum_num + 1)
+                print('Curriculum number', train_sim.curriculum_num)
+                train_dataset.clear_cache()
             if args.scheduler == 'plateau':
                 scheduler.step(val_loss)
             elif args.scheduler == 'cosine':
@@ -418,7 +425,7 @@ def main(args):
     #         model.rnn.flatten_parameters()
 
     # Run on test data.
-    test_loss = evaluate(model, step, eval_loader, criterion, sim, args)
+    test_loss, test_acc = evaluate(model, step, eval_loader, criterion, sim, args)
     torch.save(checkpoint, os.path.join(args.save, f"model-{checkpoint['epoch']}.pt"))
     print('=' * 89)
     print('| End of training | test loss {:5.2f}'.format(

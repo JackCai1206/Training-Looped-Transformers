@@ -63,6 +63,10 @@ class SubleqDataSetV2(Dataset):
                     self.targets_cache[mode][i] = y
             yield x, y
             i += 1
+    
+    def clear_cache(self):
+        self.data_cache.clear()
+        self.targets_cache.clear()
 
     def __len__(self):
         return self.num_data

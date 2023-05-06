@@ -1,5 +1,5 @@
 NUM_TRAINERS=1
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=3
 
 cmd=(
 torchrun 
@@ -10,6 +10,7 @@ torchrun
     --data=/data/hulab/zcai75/looped-transformers/ 
     --cuda 
     -N=5
+    -n=24
     --epochs=10000
     --log_interval=20 
     --save=/data/hulab/zcai75/looped-transformers/checkpoints/ 
@@ -17,11 +18,11 @@ torchrun
     --eval_batch_size=5000 
     --emsize=128
     --nhid=512 
-    --nlayers=10
+    --nlayers=16
     --nhead=4 
     --dropout=0 
-    # --lr=3.28E-05
-    --lr=5.57E-05
+    --lr=5.28E-05
+    # --lr=4.25E-02
     --grad_noise=0 
     --block_diag=False
     --signed_mag=100 

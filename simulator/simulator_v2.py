@@ -6,7 +6,7 @@ def to_digits(x: torch.Tensor, num_digits: int):
     return [x // (10 ** i) % 10 for i in reversed(range(num_digits))]
 
 class SubleqSimV2():
-    def __init__(self, max_val, num_mem, num_inst):
+    def __init__(self, max_val, num_mem, num_inst, curriculum=False):
         self.max_val = max_val
         # self.max_val = 100
         self.num_mem = num_mem
@@ -39,12 +39,20 @@ class SubleqSimV2():
 
         # pc + mem + inst + extra 
         self.col_dim = 1 + self.num_mem + self.num_inst * 3 + 3
+        self.curriculum_num = 0
+        self.curriculum = curriculum
     
+    def set_curriculum_num(self, curriculum_num):
+        self.curriculum_num = curriculum_num
+
     def create_state(self):
         self.mem = torch.randint(0, self.max_val, (self.num_mem,))
         self.inst = torch.randint(0, self.num_mem, (self.num_inst, 3))
-        # self.pc = torch.randint(0, self.num_inst, (1,))
-        self.pc = torch.tensor([0])
+        if self.curriculum:
+            self.pc = torch.randint(0, min(self.num_inst, 2 ** self.curriculum_num), (1,))
+        else:
+            self.pc = torch.randint(0, self.num_inst, (1,))
+        # self.pc = torch.tensor([0])
         return self.tokenize_state()
         # return torch.cat((self.tokenize_state(), torch.tensor([self.enc_dictionary['pc']])), dim=-1)
         # return torch.cat((self.tokenize_state(), torch.tensor([self.enc_dictionary['ans']] * self.num_digit)), dim=-1)
