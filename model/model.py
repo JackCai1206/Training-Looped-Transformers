@@ -72,7 +72,7 @@ class LoopedTransformerModelV2(nn.Module):
         self.num_encoder_layers = num_encoder_layers
 
         self.pos_encoder = PositionalEncoding(self.d_model, dropout)
-        encoder_layer = TransformerEncoderLayerNoLayerNorm(self.d_model, nhead, dim_feedforward, dropout, activation, batch_first=True)
+        encoder_layer = TransformerEncoderLayer(self.d_model, nhead, dim_feedforward, dropout, activation, batch_first=True)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_encoder_layers)
         # self.blocks = nn.ModuleList([TransformerBlock(d_model=self.d_model, d_mlp=dim_feedforward, d_head=self.d_model//self.nhead, num_heads=self.nhead, n_ctx=sim.num_tokens, act_type=activation, attn_only=False, model=[self]) for i in range(num_encoder_layers)])
         self.encoder = nn.Embedding(sim.num_tokens, self.d_model)

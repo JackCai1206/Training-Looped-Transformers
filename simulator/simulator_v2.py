@@ -49,7 +49,8 @@ class SubleqSimV2():
         self.mem = torch.randint(0, self.max_val, (self.num_mem,))
         self.inst = torch.randint(0, self.num_mem, (self.num_inst, 3))
         if self.curriculum:
-            self.pc = torch.randint(0, min(self.num_inst, 2 ** self.curriculum_num), (1,))
+            # self.pc = torch.randint(0, min(self.num_inst, max(1, 2 * self.curriculum_num)), (1,))
+            self.pc = torch.randint(0, min(self.num_inst, max(1, 2 ** self.curriculum_num)), (1,))
         else:
             self.pc = torch.randint(0, self.num_inst, (1,))
         # self.pc = torch.tensor([0])
@@ -66,11 +67,13 @@ class SubleqSimV2():
         # Account for overflow and underflow
         self.mem[b] = (self.mem[b] - self.mem[a]) % self.max_val
 
-        # if self.mem[b] > self.max_val // 2:
-        #     self.pc = c
+        # if (self.curriculum and self.num_inst < 2 ** self.curriculum_num) or not self.curriculum:
+        if self.mem[b] > self.max_val // 2:
+            self.pc = c
+        else:
+            self.pc = (self.pc + 1) % self.num_inst
         # else:
-        #     # Account for overflow
-        self.pc = (self.pc + 1) % self.num_inst
+        #     self.pc = (self.pc + 1) % self.num_inst
         return self.tokenize_state()
         # diff = ((self.mem[b] - self.mem[a]) % self.max_val).long()
         # if diff < 0:

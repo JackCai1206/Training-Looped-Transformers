@@ -24,7 +24,6 @@ class SubleqDataSet(Dataset):
                 sim.create_state()
                 x = torch.clone(sim.X).T.to(device)
                 y = torch.clone(sim.step(task)).T.to(device)
-                print(x,y)
                 if fix_set:
                     self.data_cache[mode][i] = x
                     self.targets_cache[mode][i] = y
@@ -39,34 +38,37 @@ class SubleqDataSet(Dataset):
 
 
 class SubleqDataSetV2(Dataset):
-    data_cache = defaultdict(dict)
-    targets_cache = defaultdict(dict)
-    def __init__(self, sim: SubleqSimV2, num_data, device, mode="train", task=2, fix_set=True):
+    def __init__(self, sim: SubleqSimV2, num_data, device, task=2, fix_set=True):
         self.num_data = num_data
-        self.data_iter = self.get_data_iter(sim, num_data, device, mode, task, fix_set)
+        self.data_iter = self.get_data_iter(sim, num_data, device, task, fix_set)
+        self.data_cache = defaultdict(dict)
+        self.targets_cache = defaultdict(dict)
 
-    def get_data_iter(self, sim: SubleqSimV2, num_data, device, mode="train", task=2, fix_set=True):
+    def get_data_iter(self, sim: SubleqSimV2, num_data, device, task=2, fix_set=True):
         i = 0
         # sim.create_state()
         while True:
             i = i % num_data
-            if fix_set and i in self.data_cache[mode]:
-                x = self.data_cache[mode][i]
-                y = self.targets_cache[mode][i]
+            if fix_set and i in self.data_cache:
+                x = self.data_cache[i]
+                y = self.targets_cache[i]
             else:
                 x = torch.clone(sim.create_state()).to(device)
                 # x = torch.clone(sim.tokenize_state()).to(device)
                 y = torch.clone(sim.step()).to(device)
                 y = nn.functional.one_hot(y, sim.num_tokens).float()
                 if fix_set:
-                    self.data_cache[mode][i] = x
-                    self.targets_cache[mode][i] = y
+                    self.data_cache[i] = x
+                    self.targets_cache[i] = y
             yield x, y
             i += 1
     
     def clear_cache(self):
         self.data_cache.clear()
         self.targets_cache.clear()
+    
+    def get_cache(self):
+        return self.data_cache, self.targets_cache
 
     def __len__(self):
         return self.num_data

@@ -21,8 +21,8 @@ import simulator
 import wandb
 
 parser = argparse.ArgumentParser(description='Training Looped Transformers')
-parser.add_argument('--data', type=str, default='.',
-                    help='location of the data')
+# parser.add_argument('--data', type=str, default='.',
+#                     help='location of the data')
 parser.add_argument('--model', type=str, default='Transformer',
                     help='type of network')
 parser.add_argument('--emsize', type=int, default=200,
@@ -53,7 +53,7 @@ parser.add_argument('--mps', action='store_true', default=False,
                         help='enables macOS GPU training')
 parser.add_argument('--log_interval', type=int, default=20, metavar='N',
                     help='report interval')
-parser.add_argument('--save', type=str, default='model.pt',
+parser.add_argument('--save', type=str, default='',
                     help='path to save the final model')
 parser.add_argument('--onnx-export', type=str, default='',
                     help='path to export the final model in onnx format')
@@ -66,7 +66,7 @@ parser.add_argument('--block_diag', type=bool, default=True)
 parser.add_argument('--resume', type=str, default=None)
 parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'sgd'])
 parser.add_argument('--criterion', type=str, default='l1', choices=['l1', 'mse', 'ce'])
-parser.add_argument('--scheduler', type=str, default='cosine', choices=['cosine', 'plateau'])
+parser.add_argument('--scheduler', type=str, default='cosine', choices=['cosine', 'plateau', 'constant'])
 parser.add_argument('--warmup_steps', type=int, default=4000)
 parser.add_argument('--weight_decay', type=float, default=0.0)
 parser.add_argument('--betas', type=float, nargs=2, default=(0.9, 0.999))
@@ -145,8 +145,11 @@ def evaluate(model, step, eval_loader, criterion, sim, args):
                 # num_el += output.shape[0] * (output.shape[1] - sim.num_inst - 1)
                 num_correct += torch.sum(torch.prod(output == targets, dim=-1)).item()
                 num_el += output.shape[0]
+            else:
+                num_correct += torch.sum(torch.prod(torch.flatten(output.long() == targets.long(), -2, -1), dim=-1)).item()
+                num_el += output.shape[0]
 
-            if i == 0:
+            if i == 0 and args.sim_type == 'v2':
                 print(sim.detok(data[0].detach().cpu().numpy()))
                 print(sim.detok(output[0].detach().cpu().numpy()))
                 print(sim.detok(targets[0].detach().cpu().numpy()))
@@ -167,10 +170,9 @@ def evaluate(model, step, eval_loader, criterion, sim, args):
                                 'example_target': wandb.Image(targets[0].T.detach().cpu().numpy()),
                                 'register_diff': wandb.Image(torch.abs(output[0] - targets[0]).T.detach().cpu().numpy())}, step=step, commit=False)
     
-    if args.sim_type == 'v2':
-        print('Test Accuracy: {:f}'.format(num_correct / num_el))
-        if args.wandb:
-            wandb.log({ 'Test Accuracy': num_correct / num_el}, step=step, commit=False)
+    print('Val Accuracy: {:f}'.format(num_correct / num_el))
+    if args.wandb:
+        wandb.log({ 'Val Accuracy': num_correct / num_el}, step=step, commit=False)
     return total_loss / (args.num_eval_batches), num_correct / num_el
 
 
@@ -202,7 +204,8 @@ def train(model, step, epoch, train_loader, optimizer, criterion, args):
                 p.grad += torch.randn(p.grad.shape).to(args.device) * args.grad_noise
 
         # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
-        torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+        if args.clip > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
         optimizer.step()
         # for p in model.parameters():
         #     p.data.add_(p.grad, alpha=-lr)
@@ -216,6 +219,9 @@ def train(model, step, epoch, train_loader, optimizer, criterion, args):
             # num_correct += torch.sum(output[:, :-(sim.num_inst + 1)] == targets[:, :-(sim.num_inst + 1)]).item()
             # num_el += output.shape[0] * (output.shape[1] - sim.num_inst - 1)
             num_correct += torch.sum(torch.prod(output == targets, dim=-1)).item()
+            num_el += output.shape[0]
+        else:
+            num_correct += torch.sum(torch.prod(torch.flatten(output.long() == targets.long(), -2, -1), dim=-1)).item()
             num_el += output.shape[0]
 
         if (i % args.log_interval == 0 and i > 0) or i == args.num_train_batches:
@@ -236,10 +242,9 @@ def train(model, step, epoch, train_loader, optimizer, criterion, args):
         if args.dry_run:
             break
     
-    if args.sim_type == 'v2':
-        print('Train Accuracy: {:f}'.format(num_correct / num_el))
-        if args.wandb:
-            wandb.log({ 'Train Accuracy': num_correct / num_el}, step=step, commit=False)
+    print('Train Accuracy: {:f}'.format(num_correct / num_el))
+    if args.wandb:
+        wandb.log({ 'Train Accuracy': num_correct / num_el}, step=step, commit=False)
 
     return step, num_correct / num_el
 
@@ -259,8 +264,9 @@ def main(args):
             args = argparse.Namespace(**args_dict)
         wandb.config.update(args)
 
-    if not os.path.exists(args.save):
-        os.makedirs(args.save)
+        savedir = os.path.join(args.save, wandb.run.name)
+        if not os.path.exists(savedir):
+            os.makedirs(savedir)
 
     # Set the random seed manually for reproducibility.
     torch.manual_seed(args.seed)
@@ -295,7 +301,7 @@ def main(args):
         max_val = 2**args.N
         num_mem = args.m
         num_inst = args.n - args.m - args.s 
-        train_sim = simulator.SubleqSimV2(max_val, num_mem, num_inst)
+        train_sim = simulator.SubleqSimV2(max_val, num_mem, num_inst, curriculum=True)
         test_sim = simulator.SubleqSimV2(max_val, num_mem, num_inst)
     else:
         train_sim = test_sim = simulator.SubleqSim(args.N, args.s, args.m, args.n, args.signed_mag, block_diag=args.block_diag)
@@ -335,7 +341,9 @@ def main(args):
     elif args.scheduler == 'cosine':
         scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=100, T_mult=2, eta_min=1e-6)
     elif args.scheduler == 'plateau':
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=20, verbose=True, min_lr=1e-6)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=100, verbose=True, min_lr=1e-7)
+    elif args.scheduler == 'constant':
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=100, gamma=1)
 
     if args.resume is not None:
         model.load_state_dict(checkpoint['model_state_dict'])
@@ -351,8 +359,8 @@ def main(args):
     args.num_eval_batches = args.num_valid // args.eval_batch_size
     args.num_train_batches = args.num_train // args.batch_size
     if args.sim_type == 'v2':
-        train_dataset = SubleqDataSetV2(train_sim, args.num_train, args.device, task=args.task, fix_set=args.fix_set, mode="train")
-        val_dataset = SubleqDataSetV2(test_sim, args.num_valid, args.device, task=args.task, fix_set=args.fix_set, mode="val")
+        train_dataset = SubleqDataSetV2(train_sim, args.num_train, args.device, task=args.task, fix_set=args.fix_set)
+        val_dataset = SubleqDataSetV2(test_sim, args.num_valid, args.device, task=args.task, fix_set=args.fix_set)
         train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=False)
         eval_loader = DataLoader(val_dataset, batch_size=args.eval_batch_size, shuffle=False)
     else:
@@ -361,6 +369,7 @@ def main(args):
 
     # Loop over epochs.
     best_val_loss = loss_resume
+    best_val_acc = 0
     step = 0
 
     if args.lr_finder:
@@ -382,6 +391,12 @@ def main(args):
                 train_sim.set_curriculum_num(train_sim.curriculum_num + 1)
                 print('Curriculum number', train_sim.curriculum_num)
                 train_dataset.clear_cache()
+                # reset the learning rate but with a lower patience
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = args.lr if train_sim.curriculum_num < 7 else 1e-5
+                    param_group['patience'] = 40
+                if args.wandb:
+                    wandb.log({ 'curriculum_num': train_sim.curriculum_num}, step=step)
             if args.scheduler == 'plateau':
                 scheduler.step(val_loss)
             elif args.scheduler == 'cosine':
@@ -392,17 +407,21 @@ def main(args):
             print('-' * 89)
             if args.wandb:
                 wandb.log({ 'val_loss': val_loss}, step=step, commit=True)
-            # Save the model if the validation loss is the best we've seen so far.
-            if not best_val_loss or val_loss < best_val_loss:
+            # Save the model if the val accuracy is the best we've seen so far.
+            # if not best_val_loss or val_loss < best_val_loss:
+            if epoch % 50 == 0 and (not best_val_acc or val_acc > best_val_acc):
                 torch.save({
                     'epoch': epoch,
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'scheduler_state_dict': scheduler.state_dict(),
                     'loss': val_loss,
-                    'wandb_id': run_id if args.wandb else None
-                }, os.path.join(args.save, f'model-best-task-{args.task}.pt'))
+                    'wandb_id': run_id if args.wandb else None,
+                    'train_accuracy': train_acc,
+                    'test_accuracy': val_acc,
+                }, os.path.join(args.save, wandb.run.name, f'best-val-acc-{round(val_acc, 4)}-epoch-{epoch}.pt'))
                 best_val_loss = val_loss
+                best_val_acc = val_acc
             # elif val_loss < best_val_loss + 0.01:
             #     pass
             # else:
@@ -425,8 +444,8 @@ def main(args):
     #         model.rnn.flatten_parameters()
 
     # Run on test data.
-    test_loss, test_acc = evaluate(model, step, eval_loader, criterion, sim, args)
-    torch.save(checkpoint, os.path.join(args.save, f"model-{checkpoint['epoch']}.pt"))
+    test_loss, test_acc = evaluate(model, step, eval_loader, criterion, test_sim, args)
+    torch.save(checkpoint, os.path.join(args.save, wandb.run.name, f'final-test-acc-{round(test_acc, 4)}.pt-epoch-{epoch}.pt'))
     print('=' * 89)
     print('| End of training | test loss {:5.2f}'.format(
         test_loss))
