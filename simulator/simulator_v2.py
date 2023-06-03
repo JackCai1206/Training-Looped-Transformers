@@ -45,6 +45,9 @@ class SubleqSimV2():
     def set_curriculum_num(self, curriculum_num):
         self.curriculum_num = curriculum_num
 
+    def check_done(self):
+        return 2**self.curriculum_num > self.num_inst
+
     def create_state(self):
         self.mem = torch.randint(0, self.max_val, (self.num_mem,))
         self.inst = torch.randint(0, self.num_mem, (self.num_inst, 3))

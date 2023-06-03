@@ -25,9 +25,9 @@ parser = argparse.ArgumentParser(description='Training Looped Transformers')
 #                     help='location of the data')
 parser.add_argument('--model', type=str, default='Transformer',
                     help='type of network')
-parser.add_argument('--emsize', type=int, default=200,
+parser.add_argument('--emsize', type=int, default=256,
                     help='size of word embeddings')
-parser.add_argument('--nhid', type=int, default=2048,
+parser.add_argument('--nhid', type=int, default=1024,
                     help='number of hidden units per layer')
 parser.add_argument('--nlayers', type=int, default=16,
                     help='number of layers')
@@ -35,11 +35,11 @@ parser.add_argument('--lr', type=float, default=1e-5,
                     help='initial learning rate')
 parser.add_argument('--clip', type=float, default=0.25,
                     help='gradient clipping')
-parser.add_argument('--epochs', type=int, default=40,
+parser.add_argument('--epochs', type=int, default=1500,
                     help='upper epoch limit')
-parser.add_argument('--batch_size', type=int, default=200, metavar='N',
+parser.add_argument('--batch_size', type=int, default=250, metavar='N',
                     help='batch size')
-parser.add_argument('--eval_batch_size', type=int, default=200, metavar='N',
+parser.add_argument('--eval_batch_size', type=int, default=5000, metavar='N',
                     help='batch size')
 # parser.add_argument('--bptt', type=int, default=35,
 #                     help='sequence length')
@@ -47,13 +47,13 @@ parser.add_argument('--dropout', type=float, default=0.2,
                     help='dropout applied to layers (0 = no dropout)')
 parser.add_argument('--seed', type=int, default=1111,
                     help='random seed')
-parser.add_argument('--cuda', action='store_true', default=False,
+parser.add_argument('--cuda', action='store_true', default=True,
                     help='use CUDA')
 parser.add_argument('--mps', action='store_true', default=False,
                         help='enables macOS GPU training')
 parser.add_argument('--log_interval', type=int, default=20, metavar='N',
                     help='report interval')
-parser.add_argument('--save', type=str, default='',
+parser.add_argument('--save', type=str, default='checkpoints',
                     help='path to save the final model')
 parser.add_argument('--onnx-export', type=str, default='',
                     help='path to export the final model in onnx format')
@@ -62,11 +62,12 @@ parser.add_argument('--nhead', type=int, default=8,
 parser.add_argument('--dry_run', action='store_true',
                     help='verify the code and the model')
 parser.add_argument('--grad_noise', type=float, default=5e-2)
-parser.add_argument('--block_diag', type=bool, default=True)
+parser.add_argument('--block_diag', type=bool, default=False)
 parser.add_argument('--resume', type=str, default=None)
 parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'sgd'])
-parser.add_argument('--criterion', type=str, default='l1', choices=['l1', 'mse', 'ce'])
-parser.add_argument('--scheduler', type=str, default='cosine', choices=['cosine', 'plateau', 'constant'])
+parser.add_argument('--patience', type=int, default=100)
+parser.add_argument('--criterion', type=str, default='ce', choices=['l1', 'mse', 'ce'])
+parser.add_argument('--scheduler', type=str, default='plateau', choices=['cosine', 'plateau', 'constant'])
 parser.add_argument('--warmup_steps', type=int, default=4000)
 parser.add_argument('--weight_decay', type=float, default=0.0)
 parser.add_argument('--betas', type=float, nargs=2, default=(0.9, 0.999))
@@ -76,11 +77,13 @@ parser.add_argument('-N', type=int, default=8, required=False, help='Number of b
 parser.add_argument('-s', type=int, default=8, required=False, help='Number of scratch pad columns')
 parser.add_argument('-m', type=int, default=8, required=False, help='Number of memory locations')
 parser.add_argument('-n', type=int, default=32, required=False, help='Total number of columns')
+parser.add_argument('--num_mem', type=int, default=8, required=False, help='Number of memory locations')
+parser.add_argument('--num_inst', type=int, default=8, required=False, help='Number of instructions')
 
 parser.add_argument('--num_train', type=int, default=100000, required=False, help='Number of training data points')
 parser.add_argument('--num_valid', type=int, default=5000, required=False, help='Number of validutation data points')
-parser.add_argument('--signed_mag', type=int, default=1, required=False, help='Magnitude of signed binary numbers')
-parser.add_argument('--task', type=int, default=2, required=False, help='Task for curriculum learning')
+parser.add_argument('--signed_mag', type=int, default=10, required=False, help='Magnitude of signed binary numbers')
+parser.add_argument('--task', type=int, default=1, required=False, help='Task for curriculum learning')
 parser.add_argument('--fix_set', type=bool, default=True, help="Fix the train/val set for each epoch.")
 
 parser.add_argument('--lr_finder', action='store_true', default=False)
@@ -172,7 +175,7 @@ def evaluate(model, step, eval_loader, criterion, sim, args):
     
     print('Val Accuracy: {:f}'.format(num_correct / num_el))
     if args.wandb:
-        wandb.log({ 'Val Accuracy': num_correct / num_el}, step=step, commit=False)
+        wandb.log({ 'val_acc': num_correct / num_el}, step=step, commit=False)
     return total_loss / (args.num_eval_batches), num_correct / num_el
 
 
@@ -244,7 +247,7 @@ def train(model, step, epoch, train_loader, optimizer, criterion, args):
     
     print('Train Accuracy: {:f}'.format(num_correct / num_el))
     if args.wandb:
-        wandb.log({ 'Train Accuracy': num_correct / num_el}, step=step, commit=False)
+        wandb.log({ 'train_acc': num_correct / num_el}, step=step, commit=False)
 
     return step, num_correct / num_el
 
@@ -255,7 +258,7 @@ def train(model, step, epoch, train_loader, optimizer, criterion, args):
 #     hidden = model.init_hidden(batch_size)
 #     torch.onnx.export(model, (dummy_input, hidden), path)
 
-def main(args):
+def main(args, checkpoint):
     if args.wandb:
         wandb.init(project="training-looped-transformers", resume="allow", config=args, id=run_id)
         if args.sweep:
@@ -299,8 +302,8 @@ def main(args):
     # print('data_config', data_config)
     if args.sim_type == 'v2':
         max_val = 2**args.N
-        num_mem = args.m
-        num_inst = args.n - args.m - args.s 
+        num_mem = args.num_mem
+        num_inst = args.num_inst
         train_sim = simulator.SubleqSimV2(max_val, num_mem, num_inst, curriculum=True)
         test_sim = simulator.SubleqSimV2(max_val, num_mem, num_inst)
     else:
@@ -341,7 +344,7 @@ def main(args):
     elif args.scheduler == 'cosine':
         scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=100, T_mult=2, eta_min=1e-6)
     elif args.scheduler == 'plateau':
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=100, verbose=True, min_lr=1e-7)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=args.patience, verbose=True, min_lr=1e-7)
     elif args.scheduler == 'constant':
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=100, gamma=1)
 
@@ -388,6 +391,10 @@ def main(args):
             step, train_acc = train(model, step, epoch, train_loader, optimizer, criterion, args)
             val_loss, val_acc = evaluate(model, step, eval_loader, criterion, test_sim, args)
             if train_acc > 0.99:
+                if train_sim.check_done() & train_acc == 1:
+                    print('Training done!')
+                    break
+
                 train_sim.set_curriculum_num(train_sim.curriculum_num + 1)
                 print('Curriculum number', train_sim.curriculum_num)
                 train_dataset.clear_cache()
@@ -455,6 +462,7 @@ def main(args):
 
 if __name__ == '__main__':
     args = parser.parse_args()
+    checkpoint = None
     if args.resume is not None:
         checkpoint = torch.load(args.resume)
         run_id = None if 'wandb_id' not in checkpoint else checkpoint['wandb_id']
@@ -463,10 +471,10 @@ if __name__ == '__main__':
 
     if args.wandb and args.sweep:
         def main_fac(args):
-            return lambda: main(args)
+            return lambda: main(args, checkpoint)
         with open(args.sweep_config) as f:
             sweep_config = yaml.load(f, Loader=yaml.FullLoader)
         sweep_id = wandb.sweep(sweep_config, project="training-looped-transformers")
         wandb.agent(sweep_id, function=main_fac(args))
     else:
-        main(args)
+        main(args, checkpoint)

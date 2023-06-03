@@ -1,30 +1,22 @@
 program: main.py
 method: grid
 metric:
-  name: val_loss
-  goal: minimize
+  name: val_acc
+  goal: maximize
 # early_terminate:
 #   type: hyperband
 #   min_iter: 3
 #   eta: 3
 parameters:
-  lr:
-    values: [1.3e-3, 1.e-2]
-  optimizer:
-    values: ["adam"]
-  criterion:
-    values: ["mse", "l1"]
-  block_diag:
-    values: [True, False]
-  dropout:
-    values: [0.2]
-  # batch_size:
-  #   values: [500, 1000]
-  betas:
-    values: [[0.9, 0.999], [0.9, 0.98], [0.9, 0.8]]
-  fix_set:
-    values: [True]
-  scheduler:
-    values: ["cosine"]
-  weight_decay:
-    values: [0.0, 1.e-4]
+  num_mem:
+    values: [1, 2, 4, 8, 16, 32, 64]
+  num_inst:
+    values: [1, 2, 4, 8, 16, 32, 64]
+  # em_size:
+  #   values: [128, 256]
+  # nhid:
+  #   values: [512, 1024]
+  # nlayers:
+  #   values: [8, 16, 24]
+  # nhead:
+  #   values: [4, 8]
