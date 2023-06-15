@@ -33,7 +33,7 @@ class LoopedTransformerModel(nn.Module):
     r"""Looped transformer model. Takes in the current machine state and return the next machine state."""
     def __init__(self, sim: SubleqSim, nhead, num_encoder_layers, dim_feedforward=2048, dropout=0.1, activation="relu"):
         super().__init__()
-        encoder_layer = nn.TransformerEncoderLayer(sim.col_dim, nhead, dim_feedforward, dropout, activation, batch_first=True)
+        encoder_layer = TransformerEncoderLayerNoLayerNorm(sim.col_dim, nhead, dim_feedforward, dropout, activation, batch_first=True)
         self.encoder = nn.TransformerEncoder(encoder_layer, num_encoder_layers, norm=None)
         # self.linear = nn.Linear(d_model, d_model)
         # self.transformer = nn.Transformer(d_model=sim.col_dim, nhead=nhead, num_encoder_layers=num_encoder_layers, dim_feedforward=dim_feedforward, dropout=dropout, activation=activation, batch_first=True)

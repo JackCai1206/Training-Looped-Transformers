@@ -67,6 +67,7 @@ parser.add_argument('--resume', type=str, default=None)
 parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'sgd'])
 parser.add_argument('--patience', type=int, default=100)
 parser.add_argument('--criterion', type=str, default='ce', choices=['l1', 'mse', 'ce'])
+parser.add_argument('--label_smoothing', type=float, default=0.0)
 parser.add_argument('--scheduler', type=str, default='plateau', choices=['cosine', 'plateau', 'constant'])
 parser.add_argument('--warmup_steps', type=int, default=4000)
 parser.add_argument('--weight_decay', type=float, default=0.0)
@@ -90,6 +91,7 @@ parser.add_argument('--lr_finder', action='store_true', default=False)
 parser.add_argument('--wandb', action='store_true', default=False)
 parser.add_argument('--sweep', action='store_true', default=False)
 parser.add_argument('--sweep_config', type=str, default=None)
+parser.add_argument('--sweep_id', type=str, default=None)
 
 ###############################################################################
 # Training code
@@ -228,7 +230,11 @@ def train(model, step, epoch, train_loader, optimizer, criterion, args):
             num_el += output.shape[0]
 
         if (i % args.log_interval == 0 and i > 0) or i == args.num_train_batches:
-            cur_loss = total_loss / args.log_interval
+            # adjust for last batch
+            if i == args.num_train_batches and i % args.log_interval != 0:
+                cur_loss = total_loss / (i % args.log_interval)
+            else:
+                cur_loss = total_loss / args.log_interval
             elapsed = time.time() - start_time
 
             if args.wandb:
@@ -323,7 +329,7 @@ def main(args, checkpoint):
     elif args.criterion == 'l1':
         criterion = nn.L1Loss(reduction='mean')
     elif args.criterion == 'ce':
-        criterion = nn.CrossEntropyLoss(reduction='mean')
+        criterion = nn.CrossEntropyLoss(reduction='mean', label_smoothing=args.label_smoothing)
 
     if args.wandb:
         # wandb.log({'src_mask': wandb.Image(model.src_mask.float())})
@@ -373,7 +379,7 @@ def main(args, checkpoint):
     # Loop over epochs.
     best_val_loss = loss_resume
     best_val_acc = 0
-    step = 0
+    step = checkpoint['step'] if checkpoint else 0
 
     if args.lr_finder:
         lr_finder = LRFinder(model, optimizer, criterion, device="cuda")
@@ -390,20 +396,7 @@ def main(args, checkpoint):
             epoch_start_time = time.time()
             step, train_acc = train(model, step, epoch, train_loader, optimizer, criterion, args)
             val_loss, val_acc = evaluate(model, step, eval_loader, criterion, test_sim, args)
-            if train_acc > 0.99:
-                if train_sim.check_done() & train_acc == 1:
-                    print('Training done!')
-                    break
-
-                train_sim.set_curriculum_num(train_sim.curriculum_num + 1)
-                print('Curriculum number', train_sim.curriculum_num)
-                train_dataset.clear_cache()
-                # reset the learning rate but with a lower patience
-                for param_group in optimizer.param_groups:
-                    param_group['lr'] = args.lr if train_sim.curriculum_num < 7 else 1e-5
-                    param_group['patience'] = 40
-                if args.wandb:
-                    wandb.log({ 'curriculum_num': train_sim.curriculum_num}, step=step)
+            
             if args.scheduler == 'plateau':
                 scheduler.step(val_loss)
             elif args.scheduler == 'cosine':
@@ -426,9 +419,28 @@ def main(args, checkpoint):
                     'wandb_id': run_id if args.wandb else None,
                     'train_accuracy': train_acc,
                     'test_accuracy': val_acc,
+                    'step': step
                 }, os.path.join(args.save, wandb.run.name, f'best-val-acc-{round(val_acc, 4)}-epoch-{epoch}.pt'))
                 best_val_loss = val_loss
                 best_val_acc = val_acc
+            
+            if train_acc > 0.99:
+                if train_sim.check_curriculum_done() and train_acc == 1:
+                    
+                    print('Training done!')
+                    break
+                if not train_sim.check_curriculum_done():
+                    train_sim.set_curriculum_num(train_sim.curriculum_num + 1)
+
+                print('Curriculum number', train_sim.curriculum_num)
+                if args.wandb:
+                    wandb.log({ 'curriculum_num': train_sim.curriculum_num}, step=step)
+                train_dataset.clear_cache()
+                # reset the learning rate but with a lower patience
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = args.lr if train_sim.curriculum_num < 7 else 1e-5
+                    param_group['patience'] = 40
+
             # elif val_loss < best_val_loss + 0.01:
             #     pass
             # else:
@@ -474,7 +486,12 @@ if __name__ == '__main__':
             return lambda: main(args, checkpoint)
         with open(args.sweep_config) as f:
             sweep_config = yaml.load(f, Loader=yaml.FullLoader)
-        sweep_id = wandb.sweep(sweep_config, project="training-looped-transformers")
-        wandb.agent(sweep_id, function=main_fac(args))
+        
+        if not args.sweep_id:
+            sweep_id = wandb.sweep(sweep_config, project="training-looped-transformers")
+            print(sweep_id)
+            wandb.agent(sweep_id, function=main_fac(args))
+        else:
+            wandb.agent(args.sweep_id, function=main_fac(args), project="training-looped-transformers")
     else:
         main(args, checkpoint)

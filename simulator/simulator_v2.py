@@ -16,6 +16,12 @@ class SubleqSimV2():
         self.inst = torch.zeros((num_inst, 3), dtype=torch.int64)
         self.pc = torch.zeros(1, dtype=torch.int64)
 
+        # self.dec_dictionary = {}
+        # for prefix in ['m', 'i', 'p']:
+        #     for i in range(10):
+        #         c = len(self.dec_dictionary)
+        #         self.dec_dictionary[c] = prefix + str(i)
+
         # self.dec_dictionary = {i: i for i in range(self.max_val)}
         self.dec_dictionary = {i: i for i in range(10)}
         # self.dec_dictionary[self.max_val] = "pc"
@@ -26,11 +32,12 @@ class SubleqSimV2():
         # self.dec_dictionary[10 + 4] = "+"
         # self.dec_dictionary[10 + 5] = "-"
         # self.dec_dictionary[10 + 6] = "="
-        self.dec_dictionary[10 + 0] = "pc"
-        self.dec_dictionary[10 + 1] = "mem"
-        self.dec_dictionary[10 + 2] = "inst"
-        self.dec_dictionary[10 + 3] = ","
-        self.dec_dictionary[10 + 4] = " "
+        c = len(self.dec_dictionary)
+        self.dec_dictionary[c + 0] = "pc"
+        self.dec_dictionary[c + 1] = "mem"
+        self.dec_dictionary[c + 2] = "inst"
+        self.dec_dictionary[c + 3] = ","
+        self.dec_dictionary[c + 4] = " "
         # invert the dictionary
         self.enc_dictionary = {v: k for k, v in self.dec_dictionary.items()}
         self.num_tokens = len(self.dec_dictionary)
@@ -45,7 +52,7 @@ class SubleqSimV2():
     def set_curriculum_num(self, curriculum_num):
         self.curriculum_num = curriculum_num
 
-    def check_done(self):
+    def check_curriculum_done(self):
         return 2**self.curriculum_num > self.num_inst
 
     def create_state(self):
@@ -102,13 +109,18 @@ class SubleqSimV2():
         # equal_token = self.enc_dictionary['=']
         # return torch.tensor(to_digits(self.mem[0], self.num_digit) + [plus_token] + to_digits(self.mem[1], self.num_digit) + [equal_token])
 
+        def add_prefix(x, prefix):
+            # return [self.enc_dictionary[prefix + str(i.item())] for i in x]
+            return x
+
         comma = self.enc_dictionary[',']
         space = self.enc_dictionary[' ']
-        mem_digits = torch.tensor([to_digits(m, self.num_mem_digit) + [space] for m in self.mem]).flatten()[:-1]
+        mem_digits = torch.tensor([add_prefix(to_digits(m, self.num_mem_digit), 'm') + [space] for m in self.mem]).flatten()[:-1]
         inst_digits = torch.tensor([
-            list(itertools.chain.from_iterable([to_digits(i, self.num_inst_digit) + [space] for i in self.inst[j]]))[:-1] + [comma]
+            list(itertools.chain.from_iterable([add_prefix(to_digits(i, self.num_inst_digit), 'i') + [space] for i in self.inst[j]]))[:-1] + [comma]
         for j in range(self.num_inst)]).flatten()[:-1]
-        pc_digits = torch.tensor([to_digits(self.pc, self.num_inst_digit)]).flatten()
+        pc_digits = torch.tensor([add_prefix(to_digits(self.pc, self.num_inst_digit), 'p')]).flatten()
+
         return torch.cat((pc_token, pc_digits, mem_token, mem_digits, inst_token, inst_digits))
 
     def detok(self, tokens: torch.Tensor):
