@@ -1,5 +1,6 @@
 # coding: utf-8
 import argparse
+import glob
 import json
 import time
 import math
@@ -11,6 +12,7 @@ from tqdm import tqdm
 from torch_lr_finder import LRFinder
 from torch.utils.data.dataloader import DataLoader
 import yaml
+from ignite.handlers import param_scheduler
 
 from data import SubleqDataSet
 from data.data import SubleqDataSetV2
@@ -189,64 +191,70 @@ def train(model, step, epoch, train_loader, optimizer, criterion, args):
     num_el = 0
     num_correct = 0
     for i, (data, targets) in enumerate(train_loader):
-        # print('MEM: ', torch.cuda.memory_allocated())
-        step += 1
-        i = i+1
-        # Starting each batch, we detach the hidden state from how it was previously produced.
-        # If we didn't, the model would try backpropagating all the way to start of the dataset.
-        optimizer.zero_grad()
-        output = model(data)
-        if args.sim_type == 'v2':
-            pass
-        else:
-            output = quantize_data(output)
-        # print(output.shape, targets.shape)
-        loss = criterion(output, targets)
-        loss.backward()
-        # add gaussian noise to gradients
-        for p in model.parameters():
-            if p.grad is not None:
-                p.grad += torch.randn(p.grad.shape).to(args.device) * args.grad_noise
-
-        # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
-        if args.clip > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-        optimizer.step()
-        # for p in model.parameters():
-        #     p.data.add_(p.grad, alpha=-lr)
-
-        total_loss += loss.item()
-
-        # calculate accuracy if v2
-        if args.sim_type == 'v2':
-            output = torch.argmax(output, dim=-1)
-            targets = torch.argmax(targets, dim=-1)
-            # num_correct += torch.sum(output[:, :-(sim.num_inst + 1)] == targets[:, :-(sim.num_inst + 1)]).item()
-            # num_el += output.shape[0] * (output.shape[1] - sim.num_inst - 1)
-            num_correct += torch.sum(torch.prod(output == targets, dim=-1)).item()
-            num_el += output.shape[0]
-        else:
-            num_correct += torch.sum(torch.prod(torch.flatten(output.long() == targets.long(), -2, -1), dim=-1)).item()
-            num_el += output.shape[0]
-
-        if (i % args.log_interval == 0 and i > 0) or i == args.num_train_batches:
-            # adjust for last batch
-            if i == args.num_train_batches and i % args.log_interval != 0:
-                cur_loss = total_loss / (i % args.log_interval)
+        try:
+            # print('MEM: ', torch.cuda.memory_allocated())
+            step += 1
+            i = i+1
+            # Starting each batch, we detach the hidden state from how it was previously produced.
+            # If we didn't, the model would try backpropagating all the way to start of the dataset.
+            optimizer.zero_grad()
+            output = model(data)
+            if args.sim_type == 'v2':
+                pass
             else:
-                cur_loss = total_loss / args.log_interval
-            elapsed = time.time() - start_time
+                output = quantize_data(output)
+            # print(output.shape, targets.shape)
+            loss = criterion(output, targets)
+            loss.backward()
+            # add gaussian noise to gradients
+            for p in model.parameters():
+                if p.grad is not None:
+                    p.grad += torch.randn(p.grad.shape).to(args.device) * args.grad_noise
 
-            if args.wandb:
-                wandb.log({'train_loss': cur_loss,
-                            'lr': optimizer.param_groups[0]['lr']}, step=step, commit=False)
+            # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
+            if args.clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+            optimizer.step()
+            # for p in model.parameters():
+            #     p.data.add_(p.grad, alpha=-lr)
 
-            print('| epoch {:3d} | {:5d}/{:5d} batches | lr {:f} | ms/batch {:5.2f} | '
-                    'loss {:f}'.format(
-                epoch, i, args.num_train_batches, optimizer.param_groups[0]['lr'],
-                elapsed * 1000 / args.log_interval, cur_loss))
-            total_loss = 0
-            start_time = time.time()
+            total_loss += loss.item()
+
+            # calculate accuracy if v2
+            if args.sim_type == 'v2':
+                output = torch.argmax(output, dim=-1)
+                targets = torch.argmax(targets, dim=-1)
+                # num_correct += torch.sum(output[:, :-(sim.num_inst + 1)] == targets[:, :-(sim.num_inst + 1)]).item()
+                # num_el += output.shape[0] * (output.shape[1] - sim.num_inst - 1)
+                num_correct += torch.sum(torch.prod(output == targets, dim=-1)).item()
+                num_el += output.shape[0]
+            else:
+                num_correct += torch.sum(torch.prod(torch.flatten(output.long() == targets.long(), -2, -1), dim=-1)).item()
+                num_el += output.shape[0]
+
+            if (i % args.log_interval == 0 and i > 0) or i == args.num_train_batches:
+                # adjust for last batch
+                if i == args.num_train_batches and i % args.log_interval != 0:
+                    cur_loss = total_loss / (i % args.log_interval)
+                else:
+                    cur_loss = total_loss / args.log_interval
+                elapsed = time.time() - start_time
+
+                if args.wandb:
+                    wandb.log({'train_loss': cur_loss,
+                                'lr': optimizer.param_groups[0]['lr']}, step=step, commit=False)
+
+                print('| epoch {:3d} | {:5d}/{:5d} batches | lr {:f} | ms/batch {:5.2f} | '
+                        'loss {:f}'.format(
+                    epoch, i, args.num_train_batches, optimizer.param_groups[0]['lr'],
+                    elapsed * 1000 / args.log_interval, cur_loss))
+                total_loss = 0
+                start_time = time.time()
+        except RuntimeError as e:
+            if 'out of memory' in str(e):
+                args.batch_size = 800
+                print('| WARNING: ran out of memory, reducing batch size to {:5d}'.format(args.batch_size))
+                
 
         if args.dry_run:
             break
@@ -353,6 +361,8 @@ def main(args, checkpoint):
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=args.patience, verbose=True, min_lr=1e-7)
     elif args.scheduler == 'constant':
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=100, gamma=1)
+    
+    scheduler = param_scheduler.create_lr_scheduler_with_warmup(scheduler, 5e-7, args.warmup_steps)
 
     if args.resume is not None:
         model.load_state_dict(checkpoint['model_state_dict'])
@@ -392,6 +402,7 @@ def main(args, checkpoint):
 
     # At any point you can hit Ctrl + C to break out of training early.
     try:
+        val_acc_list = []
         for epoch in range(epoch_resume, args.epochs+1):
             epoch_start_time = time.time()
             step, train_acc = train(model, step, epoch, train_loader, optimizer, criterion, args)
@@ -407,6 +418,32 @@ def main(args, checkpoint):
             print('-' * 89)
             if args.wandb:
                 wandb.log({ 'val_loss': val_loss}, step=step, commit=True)
+
+            # if validation accuracy is zero for 10 epochs, restart from last checkpoint
+            val_acc_list.append(val_acc)
+            if len(val_acc_list) > 10 and epoch > 100:
+                if sum(val_acc_list[-10:]) < 1e-3:
+                    print('Validation accuracy is zero for 10 epochs, restarting from last checkpoint')
+                    paths = glob.glob(os.path.join(args.save, wandb.run.name, 'best-val-acc-*'))
+                    if len(paths) > 0:
+                        best_path = max(paths, key=os.path.getctime)
+                        checkpoint = torch.load(best_path)
+                        model.load_state_dict(checkpoint['model_state_dict'])
+                        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+                        epoch_resume = checkpoint['epoch']
+                        loss_resume = checkpoint['loss']
+                        # add some noise to the model params
+                        for param in model.parameters():
+                            param.data += torch.randn(param.size()) * 0.01
+                        print('Resuming from epoch', epoch_resume, 'with loss', loss_resume)
+                        val_acc_list = []
+                    else:
+                        print('No checkpoint found, exiting')
+                        break
+                else:
+                    val_acc_list.pop(0)
+
             # Save the model if the val accuracy is the best we've seen so far.
             # if not best_val_loss or val_loss < best_val_loss:
             if epoch % 50 == 0 and (not best_val_acc or val_acc > best_val_acc):

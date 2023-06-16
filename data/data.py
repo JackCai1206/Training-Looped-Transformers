@@ -53,14 +53,14 @@ class SubleqDataSetV2(Dataset):
                 x = self.data_cache[i]
                 y = self.targets_cache[i]
             else:
-                x = torch.clone(sim.create_state()).to(device)
+                x = torch.clone(sim.create_state())
                 # x = torch.clone(sim.tokenize_state()).to(device)
-                y = torch.clone(sim.step()).to(device)
+                y = torch.clone(sim.step())
                 y = nn.functional.one_hot(y, sim.num_tokens).float()
                 if fix_set:
                     self.data_cache[i] = x
                     self.targets_cache[i] = y
-            yield x, y
+            yield x.to(device), y.to(device)
             i += 1
     
     def clear_cache(self):
