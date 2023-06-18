@@ -82,12 +82,13 @@ parser.add_argument('-m', type=int, default=8, required=False, help='Number of m
 parser.add_argument('-n', type=int, default=32, required=False, help='Total number of columns')
 parser.add_argument('--num_mem', type=int, default=8, required=False, help='Number of memory locations')
 parser.add_argument('--num_inst', type=int, default=8, required=False, help='Number of instructions')
+parser.add_argument('--curriculum', default=False, required=False, action="store_true", help='Curriculum learning')
 
 parser.add_argument('--num_train', type=int, default=100000, required=False, help='Number of training data points')
 parser.add_argument('--num_valid', type=int, default=5000, required=False, help='Number of validutation data points')
 parser.add_argument('--signed_mag', type=int, default=10, required=False, help='Magnitude of signed binary numbers')
 parser.add_argument('--task', type=int, default=1, required=False, help='Task for curriculum learning')
-parser.add_argument('--fix_set', type=bool, default=True, help="Fix the train/val set for each epoch.")
+parser.add_argument('--fix_set', default=False, required=False, action="store_true", help="Fix the train/val set for each epoch.")
 
 parser.add_argument('--lr_finder', action='store_true', default=False)
 parser.add_argument('--wandb', action='store_true', default=False)
@@ -183,7 +184,7 @@ def evaluate(model, step, eval_loader, criterion, sim, args):
     return total_loss / (args.num_eval_batches), num_correct / num_el
 
 
-def train(model, step, epoch, train_loader, optimizer, criterion, args):
+def train(model, step, epoch, train_loader: DataLoader, optimizer, criterion, args):
     # Turn on training mode which enables dropout.
     model.train()
     total_loss = 0.
@@ -252,9 +253,10 @@ def train(model, step, epoch, train_loader, optimizer, criterion, args):
                 start_time = time.time()
         except RuntimeError as e:
             if 'out of memory' in str(e):
-                args.batch_size = 800
+                train_loader.batch_size = train_loader.batch_size // 2
+                args.batch_size = train_loader.batch_size
                 print('| WARNING: ran out of memory, reducing batch size to {:5d}'.format(args.batch_size))
-                
+
 
         if args.dry_run:
             break
@@ -274,6 +276,11 @@ def train(model, step, epoch, train_loader, optimizer, criterion, args):
 
 def main(args, checkpoint):
     if args.wandb:
+        if args.resume and 'wandb_id' in checkpoint:
+            run_id = checkpoint['wandb_id']
+        else:
+            run_id = wandb.util.generate_id()
+        print('Run ID: ', run_id)
         wandb.init(project="training-looped-transformers", resume="allow", config=args, id=run_id)
         if args.sweep:
             args_dict = vars(args)
@@ -318,7 +325,7 @@ def main(args, checkpoint):
         max_val = 2**args.N
         num_mem = args.num_mem
         num_inst = args.num_inst
-        train_sim = simulator.SubleqSimV2(max_val, num_mem, num_inst, curriculum=True)
+        train_sim = simulator.SubleqSimV2(max_val, num_mem, num_inst, curriculum=args.curriculum)
         test_sim = simulator.SubleqSimV2(max_val, num_mem, num_inst)
     else:
         train_sim = test_sim = simulator.SubleqSim(args.N, args.s, args.m, args.n, args.signed_mag, block_diag=args.block_diag)
@@ -370,6 +377,7 @@ def main(args, checkpoint):
         scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         epoch_resume = checkpoint['epoch']
         loss_resume = checkpoint['loss']
+        train_sim.set_curriculum_num(checkpoint['curriculum_num'])
         print('Resuming from epoch', epoch_resume, 'with loss', loss_resume)
     else:
         epoch_resume = 0
@@ -380,8 +388,8 @@ def main(args, checkpoint):
     if args.sim_type == 'v2':
         train_dataset = SubleqDataSetV2(train_sim, args.num_train, args.device, task=args.task, fix_set=args.fix_set)
         val_dataset = SubleqDataSetV2(test_sim, args.num_valid, args.device, task=args.task, fix_set=args.fix_set)
-        train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=False)
-        eval_loader = DataLoader(val_dataset, batch_size=args.eval_batch_size, shuffle=False)
+        train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=False, drop_last=True)
+        eval_loader = DataLoader(val_dataset, batch_size=args.eval_batch_size, shuffle=False, drop_last=True)
     else:
         train_loader = DataLoader(SubleqDataSet(train_sim, args.num_train, args.device, task=args.task, fix_set=args.fix_set, mode="train"), batch_size=args.batch_size, shuffle=False)
         eval_loader = DataLoader(SubleqDataSet(test_sim, args.num_valid, args.device, task=args.task, fix_set=args.fix_set, mode="val"), batch_size=args.eval_batch_size, shuffle=False)
@@ -433,9 +441,10 @@ def main(args, checkpoint):
                         scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
                         epoch_resume = checkpoint['epoch']
                         loss_resume = checkpoint['loss']
+                        train_sim.set_curriculum_num(checkpoint['curriculum_num'])
                         # add some noise to the model params
                         for param in model.parameters():
-                            param.data += torch.randn(param.size()) * 0.01
+                            param.data += (torch.randn(param.size()) * 0.01).to(args.device)
                         print('Resuming from epoch', epoch_resume, 'with loss', loss_resume)
                         val_acc_list = []
                     else:
@@ -456,13 +465,14 @@ def main(args, checkpoint):
                     'wandb_id': run_id if args.wandb else None,
                     'train_accuracy': train_acc,
                     'test_accuracy': val_acc,
-                    'step': step
+                    'step': step,
+                    'curriculum_num': train_sim.curriculum_num
                 }, os.path.join(args.save, wandb.run.name, f'best-val-acc-{round(val_acc, 4)}-epoch-{epoch}.pt'))
                 best_val_loss = val_loss
                 best_val_acc = val_acc
             
             if train_acc > 0.99:
-                if train_sim.check_curriculum_done() and train_acc == 1:
+                if train_sim.check_curriculum_done() and train_acc > 0.99:
                     
                     print('Training done!')
                     break
@@ -514,9 +524,6 @@ if __name__ == '__main__':
     checkpoint = None
     if args.resume is not None:
         checkpoint = torch.load(args.resume)
-        run_id = None if 'wandb_id' not in checkpoint else checkpoint['wandb_id']
-    else:
-        run_id = wandb.util.generate_id()
 
     if args.wandb and args.sweep:
         def main_fac(args):
