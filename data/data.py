@@ -38,13 +38,13 @@ class SubleqDataSet(Dataset):
 
 
 class SubleqDataSetV2(Dataset):
-    def __init__(self, sim: SubleqSimV2, num_data, device, task=2, fix_set=True):
+    def __init__(self, sim: SubleqSimV2, num_data, task=2, fix_set=True):
         self.num_data = num_data
-        self.data_iter = self.get_data_iter(sim, num_data, device, task, fix_set)
+        self.data_iter = self.get_data_iter(sim, num_data, task, fix_set)
         self.data_cache = defaultdict(dict)
         self.targets_cache = defaultdict(dict)
 
-    def get_data_iter(self, sim: SubleqSimV2, num_data, device, task=2, fix_set=True):
+    def get_data_iter(self, sim: SubleqSimV2, num_data, task=2, fix_set=True):
         i = 0
         # sim.create_state()
         while True:
@@ -60,7 +60,7 @@ class SubleqDataSetV2(Dataset):
                 if fix_set:
                     self.data_cache[i] = x
                     self.targets_cache[i] = y
-            yield x.to(device), y.to(device)
+            yield x, y
             i += 1
     
     def clear_cache(self):

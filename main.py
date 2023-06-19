@@ -1,10 +1,13 @@
 # coding: utf-8
 import argparse
+from asyncio import sleep
+import gc
 import glob
 import json
 import time
 import math
 import os
+import traceback
 import torch
 import torch.nn as nn
 import torch.onnx
@@ -139,6 +142,8 @@ def evaluate(model, step, eval_loader, criterion, sim, args):
         num_el = 0
         num_correct = 0
         for i, (data, targets) in enumerate(eval_loader):
+            data = data.to(args.device)
+            targets = targets.to(args.device)
             output = model(data)
             if args.sim_type == 'v2':
                 pass
@@ -184,7 +189,7 @@ def evaluate(model, step, eval_loader, criterion, sim, args):
     return total_loss / (args.num_eval_batches), num_correct / num_el
 
 
-def train(model, step, epoch, train_loader: DataLoader, optimizer, criterion, args):
+def train(model: LoopedTransformerModelV2, step, epoch, train_loader: DataLoader, optimizer, criterion, args):
     # Turn on training mode which enables dropout.
     model.train()
     total_loss = 0.
@@ -192,71 +197,66 @@ def train(model, step, epoch, train_loader: DataLoader, optimizer, criterion, ar
     num_el = 0
     num_correct = 0
     for i, (data, targets) in enumerate(train_loader):
-        try:
-            # print('MEM: ', torch.cuda.memory_allocated())
-            step += 1
-            i = i+1
-            # Starting each batch, we detach the hidden state from how it was previously produced.
-            # If we didn't, the model would try backpropagating all the way to start of the dataset.
-            optimizer.zero_grad()
-            output = model(data)
-            if args.sim_type == 'v2':
-                pass
-            else:
-                output = quantize_data(output)
-            # print(output.shape, targets.shape)
-            loss = criterion(output, targets)
-            loss.backward()
-            # add gaussian noise to gradients
+        step += 1
+        i = i+1
+        # Starting each batch, we detach the hidden state from how it was previously produced.
+        # If we didn't, the model would try backpropagating all the way to start of the dataset.
+        optimizer.zero_grad()
+        data = data.to(args.device)
+        targets = targets.to(args.device)
+        output = model(data)
+        if args.sim_type == 'v2':
+            pass
+        else:
+            output = quantize_data(output)
+        # print(output.shape, targets.shape)
+        loss = criterion(output, targets)
+        loss.backward()
+        # add gaussian noise to gradients
+        if args.grad_noise > 0:
             for p in model.parameters():
                 if p.grad is not None:
                     p.grad += torch.randn(p.grad.shape).to(args.device) * args.grad_noise
 
-            # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
-            if args.clip > 0:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-            optimizer.step()
-            # for p in model.parameters():
-            #     p.data.add_(p.grad, alpha=-lr)
+        # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
+        if args.clip > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+        optimizer.step()
+        # for p in model.parameters():
+        #     p.data.add_(p.grad, alpha=-lr)
 
-            total_loss += loss.item()
+        total_loss += loss.item()
 
-            # calculate accuracy if v2
-            if args.sim_type == 'v2':
-                output = torch.argmax(output, dim=-1)
-                targets = torch.argmax(targets, dim=-1)
-                # num_correct += torch.sum(output[:, :-(sim.num_inst + 1)] == targets[:, :-(sim.num_inst + 1)]).item()
-                # num_el += output.shape[0] * (output.shape[1] - sim.num_inst - 1)
-                num_correct += torch.sum(torch.prod(output == targets, dim=-1)).item()
-                num_el += output.shape[0]
+        # calculate accuracy if v2
+        if args.sim_type == 'v2':
+            output = torch.argmax(output, dim=-1)
+            targets = torch.argmax(targets, dim=-1)
+            # num_correct += torch.sum(output[:, :-(sim.num_inst + 1)] == targets[:, :-(sim.num_inst + 1)]).item()
+            # num_el += output.shape[0] * (output.shape[1] - sim.num_inst - 1)
+            num_correct += torch.sum(torch.prod(output == targets, dim=-1)).item()
+            num_el += output.shape[0]
+        else:
+            num_correct += torch.sum(torch.prod(torch.flatten(output.long() == targets.long(), -2, -1), dim=-1)).item()
+            num_el += output.shape[0]
+
+        if (i % args.log_interval == 0 and i > 0) or i == args.num_train_batches:
+            # adjust for last batch
+            if i == args.num_train_batches and i % args.log_interval != 0:
+                cur_loss = total_loss / (i % args.log_interval)
             else:
-                num_correct += torch.sum(torch.prod(torch.flatten(output.long() == targets.long(), -2, -1), dim=-1)).item()
-                num_el += output.shape[0]
+                cur_loss = total_loss / args.log_interval
+            elapsed = time.time() - start_time
 
-            if (i % args.log_interval == 0 and i > 0) or i == args.num_train_batches:
-                # adjust for last batch
-                if i == args.num_train_batches and i % args.log_interval != 0:
-                    cur_loss = total_loss / (i % args.log_interval)
-                else:
-                    cur_loss = total_loss / args.log_interval
-                elapsed = time.time() - start_time
+            if args.wandb:
+                wandb.log({'train_loss': cur_loss,
+                            'lr': optimizer.param_groups[0]['lr']}, step=step, commit=False)
 
-                if args.wandb:
-                    wandb.log({'train_loss': cur_loss,
-                                'lr': optimizer.param_groups[0]['lr']}, step=step, commit=False)
-
-                print('| epoch {:3d} | {:5d}/{:5d} batches | lr {:f} | ms/batch {:5.2f} | '
-                        'loss {:f}'.format(
-                    epoch, i, args.num_train_batches, optimizer.param_groups[0]['lr'],
-                    elapsed * 1000 / args.log_interval, cur_loss))
-                total_loss = 0
-                start_time = time.time()
-        except RuntimeError as e:
-            if 'out of memory' in str(e):
-                train_loader.batch_size = train_loader.batch_size // 2
-                args.batch_size = train_loader.batch_size
-                print('| WARNING: ran out of memory, reducing batch size to {:5d}'.format(args.batch_size))
-
+            print('| epoch {:3d} | {:5d}/{:5d} batches | lr {:f} | ms/batch {:5.2f} | '
+                    'loss {:f}'.format(
+                epoch, i, args.num_train_batches, optimizer.param_groups[0]['lr'],
+                elapsed * 1000 / args.log_interval, cur_loss))
+            total_loss = 0
+            start_time = time.time()
 
         if args.dry_run:
             break
@@ -386,8 +386,8 @@ def main(args, checkpoint):
     args.num_eval_batches = args.num_valid // args.eval_batch_size
     args.num_train_batches = args.num_train // args.batch_size
     if args.sim_type == 'v2':
-        train_dataset = SubleqDataSetV2(train_sim, args.num_train, args.device, task=args.task, fix_set=args.fix_set)
-        val_dataset = SubleqDataSetV2(test_sim, args.num_valid, args.device, task=args.task, fix_set=args.fix_set)
+        train_dataset = SubleqDataSetV2(train_sim, args.num_train, task=args.task, fix_set=args.fix_set)
+        val_dataset = SubleqDataSetV2(test_sim, args.num_valid, task=args.task, fix_set=args.fix_set)
         train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=False, drop_last=True)
         eval_loader = DataLoader(val_dataset, batch_size=args.eval_batch_size, shuffle=False, drop_last=True)
     else:
@@ -413,7 +413,23 @@ def main(args, checkpoint):
         val_acc_list = []
         for epoch in range(epoch_resume, args.epochs+1):
             epoch_start_time = time.time()
-            step, train_acc = train(model, step, epoch, train_loader, optimizer, criterion, args)
+            stop_train = False
+            while not stop_train:
+                try:
+                    step, train_acc = train(model, step, epoch, train_loader, optimizer, criterion, args)
+                except RuntimeError as e:
+                    if 'out of memory' in str(e):
+                        args.batch_size = int(args.batch_size / 1.1)
+                        print('| WARNING: ran out of memory, reducing batch size to {:5d}'.format(args.batch_size))
+                        if args.batch_size < 100:
+                            stop_train = True
+                        train_loader.dataset.clear_cache()
+                        train_loader = DataLoader(train_loader.dataset, batch_size=args.batch_size, shuffle=False, drop_last=True)
+                        # clear gpu data 
+                        model.zero_grad(set_to_none=True)
+                    else:
+                        raise e
+
             val_loss, val_acc = evaluate(model, step, eval_loader, criterion, test_sim, args)
             
             if args.scheduler == 'plateau':
@@ -455,7 +471,7 @@ def main(args, checkpoint):
 
             # Save the model if the val accuracy is the best we've seen so far.
             # if not best_val_loss or val_loss < best_val_loss:
-            if epoch % 50 == 0 and (not best_val_acc or val_acc > best_val_acc):
+            if args.wandb and epoch >= 50 and epoch % 50 == 0 and (not best_val_acc or val_acc > best_val_acc):
                 torch.save({
                     'epoch': epoch,
                     'model_state_dict': model.state_dict(),
@@ -472,7 +488,7 @@ def main(args, checkpoint):
                 best_val_acc = val_acc
             
             if train_acc > 0.99:
-                if train_sim.check_curriculum_done() and train_acc > 0.99:
+                if train_sim.check_curriculum_done() and val_acc > 0.99:
                     
                     print('Training done!')
                     break

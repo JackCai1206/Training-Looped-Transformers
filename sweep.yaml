@@ -9,7 +9,7 @@ metric:
 #   eta: 3
 parameters:
   num_mem:
-    values: [8, 10, 12, 14, 16, 18]
+    values: [12, 14, 16, 18, 20]
   num_inst:
     values: [8]
   N:
