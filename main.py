@@ -70,7 +70,7 @@ parser.add_argument('--grad_noise', type=float, default=5e-2)
 parser.add_argument('--block_diag', type=bool, default=False)
 parser.add_argument('--resume', type=str, default=None)
 parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'sgd'])
-parser.add_argument('--patience', type=int, default=100)
+parser.add_argument('--patience', type=int, default=150)
 parser.add_argument('--criterion', type=str, default='ce', choices=['l1', 'mse', 'ce'])
 parser.add_argument('--label_smoothing', type=float, default=0.0)
 parser.add_argument('--scheduler', type=str, default='plateau', choices=['cosine', 'plateau', 'constant'])
@@ -417,9 +417,11 @@ def main(args, checkpoint):
             while not stop_train:
                 try:
                     step, train_acc = train(model, step, epoch, train_loader, optimizer, criterion, args)
+                    stop_train = True
                 except RuntimeError as e:
                     if 'out of memory' in str(e):
                         args.batch_size = int(args.batch_size / 1.1)
+                        args.num_train_batches = args.num_train // args.batch_size
                         print('| WARNING: ran out of memory, reducing batch size to {:5d}'.format(args.batch_size))
                         if args.batch_size < 100:
                             stop_train = True
@@ -488,7 +490,7 @@ def main(args, checkpoint):
                 best_val_acc = val_acc
             
             if train_acc > 0.99:
-                if train_sim.check_curriculum_done() and val_acc > 0.99:
+                if train_sim.check_curriculum_done() and val_acc >= 0.98:
                     
                     print('Training done!')
                     break
