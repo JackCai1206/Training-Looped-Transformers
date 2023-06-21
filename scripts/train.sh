@@ -15,14 +15,14 @@ torchrun \
     # -n=24
     --curriculum
     --num_mem=32
-    --num_inst=8
+    --num_inst=32
     -N=8
     --num_train=100000
     --num_valid=5000
     --epochs=500
     --log_interval=20 
     --save=../checkpoints
-    --batch_size=1250
+    --batch_size=2000
     --eval_batch_size=5000 
     --emsize=256
     --nhid=1024

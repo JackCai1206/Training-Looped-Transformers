@@ -1,0 +1,26 @@
+Date:  Wed Jun 21 14:12:06 CDT 2023
+Host:  gpu2007
+System:  Linux x86_64 GNU/Linux
+GPU:  NVIDIA A100-SXM4-80GB NVIDIA A100-SXM4-80GB NVIDIA A100-SXM4-80GB NVIDIA A100-SXM4-80GB
+PREFIX=/var/lib/condor/execute/slot1/dir_350553/miniconda3
+Unpacking payload ...
+
+Installing base environment...
+
+
+Downloading and Extracting Packages
+
+
+Downloading and Extracting Packages
+
+Preparing transaction: ...working... done
+Executing transaction: ...working... done
+installation finished.
+Collecting package metadata (repodata.json): ...working... done
+Solving environment: ...working... done
+Preparing transaction: ...working... done
+Verifying transaction: ...working... done
+Executing transaction: ...working... done
+Installing pip dependencies: ...working... done
+Executing: 
+torchrun --rdzv_backend=c10d --rdzv_endpoint=localhost:20001 --standalone --nnodes=1 --nproc_per_node=1 ../main.py --cuda --sim_type=v2 --curriculum --num_mem=32 --num_inst=32 -N=8 --num_train=100000 --num_valid=5000 --epochs=500 --log_interval=20 --save=../checkpoints --batch_size=2000 --eval_batch_size=5000 --emsize=256 --nhid=1024 --nlayers=14 --nhead=4 --dropout=0 --lr=2.28E-05 --grad_noise=0 --signed_mag=10 --optimizer=adam --scheduler=constant --patience=300 --criterion=ce --label_smoothing=0.5 --task=1 --fix_set --weight_decay=0 --wandb 

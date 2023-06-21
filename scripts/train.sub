@@ -1,0 +1,24 @@
+# Python build file
+
+universe = vanilla
+log = loop_trans.log
+error = loop_trans.err
+output = loop_trans.out
+executable = condor_train.sh
+
+should_transfer_files = YES
+# when_to_transfer_output = ON_EXIT
+stream_output = True
+stream_error = True
+# transfer_input_files = 
+
++WantGPULab = true
++GPUJobLength = "short"
+
+request_gpus = 1
+require_gpus = (GlobalMemoryMb >= 24000)
+request_cpus = 1
+request_memory = 64GB
+request_disk = 16GB
+
+queue
