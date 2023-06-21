@@ -60,11 +60,12 @@ class SubleqSimV2():
 
     def create_state(self):
         self.mem = torch.randint(0, self.max_val, (self.num_mem,))
-        self.inst = torch.randint(0, self.num_mem, (self.num_inst, 3))
         if self.curriculum:
             # self.pc = torch.randint(0, min(self.num_inst, max(1, 2 * self.curriculum_num)), (1,))
+            self.inst = torch.randint(0, min(self.num_mem, max(1, 2 ** self.curriculum_num)), (self.num_inst, 3))
             self.pc = torch.randint(0, min(self.num_inst, max(1, 2 ** self.curriculum_num)), (1,))
         else:
+            self.inst = torch.randint(0, self.num_mem, (self.num_inst, 3))
             self.pc = torch.randint(0, self.num_inst, (1,))
         # self.pc = torch.tensor([0])
         return self.tokenize_state()

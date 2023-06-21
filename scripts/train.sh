@@ -13,7 +13,7 @@ torchrun \
     --sim_type=v2
     # -N=5
     # -n=24
-    # --curriculum
+    --curriculum
     --num_mem=32
     --num_inst=8
     -N=8
