@@ -517,7 +517,9 @@ def main(args, checkpoint):
         print('Exiting from training early')
 
     # Load the best saved model.
-    checkpoint = torch.load(os.path.join(args.save, f'model-best-task-{args.task}.pt'))
+    paths = glob.glob(os.path.join(args.save, wandb.run.name, 'best-val-acc-*'))
+    best_path = max(paths, key=os.path.getctime)
+    checkpoint = torch.load(best_path)
     model.load_state_dict(checkpoint['model_state_dict'])
     # with open(os.path.join(args.save, 'model.pt'), 'rb') as f:
     #     model = torch.load(f)
