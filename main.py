@@ -78,7 +78,7 @@ parser.add_argument('--warmup_steps', type=int, default=4000)
 parser.add_argument('--weight_decay', type=float, default=0.0)
 parser.add_argument('--betas', type=float, nargs=2, default=(0.9, 0.999))
 
-parser.add_argument('--sim_type', type=str, default='v2')
+parser.add_argument('--sim_type', type=str, default='v3')
 parser.add_argument('-N', type=int, default=8, required=False, help='Number of bits for integers stored in memory column')
 parser.add_argument('-s', type=int, default=8, required=False, help='Number of scratch pad columns')
 parser.add_argument('-m', type=int, default=8, required=False, help='Number of memory locations')
@@ -325,8 +325,10 @@ def main(args, checkpoint):
         max_val = 2**args.N
         num_mem = args.num_mem
         num_inst = args.num_inst
-        train_sim = simulator.SubleqSimV2(max_val, num_mem, num_inst, curriculum=args.curriculum)
-        test_sim = simulator.SubleqSimV2(max_val, num_mem, num_inst)
+        # train_sim = simulator.SubleqSimV2(max_val, num_mem, num_inst, curriculum=args.curriculum)
+        # test_sim = simulator.SubleqSimV2(max_val, num_mem, num_inst)
+        train_sim = simulator.SubleqSimV3(mem_bits=args.N, num_mem=num_mem, ary=2)
+        test_sim = simulator.SubleqSimV3(mem_bits=args.N, num_mem=num_mem, ary=2)
     else:
         train_sim = test_sim = simulator.SubleqSim(args.N, args.s, args.m, args.n, args.signed_mag, block_diag=args.block_diag)
 

@@ -14,9 +14,9 @@ torchrun \
     # -N=5
     # -n=24
     # --curriculum
-    --num_mem=32
+    --num_mem=4
     --num_inst=32
-    -N=8
+    -N=6
     --num_train=100000
     --num_valid=5000
     --epochs=500
@@ -50,7 +50,7 @@ torchrun \
     # --sweep_config=../sweep.yaml 
     # --sweep 
     # --sweep_id=asyggw01
-    --wandb 
+    # --wandb 
     # --resume=../checkpoints/devout-sweep-2/best-val-acc-0.4854-epoch-450.pt
 )
 
