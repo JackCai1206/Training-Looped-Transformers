@@ -189,6 +189,6 @@ dependencies:
       - torch-lr-finder==0.2.1
       - tqdm==4.64.1
       - transformers==4.29.0
-      - wandb==0.13.10
+      - wandb==0.15.4
       - zipp==3.15.0
 prefix: /opt/conda/envs/loop-trans

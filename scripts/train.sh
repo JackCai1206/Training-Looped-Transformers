@@ -13,7 +13,7 @@ torchrun \
     --sim_type=v2
     # -N=5
     # -n=24
-    --curriculum
+    # --curriculum
     --num_mem=32
     --num_inst=32
     -N=8
@@ -23,7 +23,7 @@ torchrun \
     --log_interval=20 
     --save=../checkpoints
     --batch_size=2000
-    --eval_batch_size=5000 
+    --eval_batch_size=2500 
     --emsize=256
     --nhid=1024
     --nlayers=14

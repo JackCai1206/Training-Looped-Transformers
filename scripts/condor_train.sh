@@ -7,7 +7,7 @@ echo 'GPU: ' `nvidia-smi --query-gpu=gpu_name --format=csv,noheader`
 set -e
 
 export HOME=$PWD
-cp -r /staging/groups/cafa-5-group/Training-Looped-Transformers $HOME/Training-Looped-Transformers
+cp -rf /staging/groups/cafa-5-group/Training-Looped-Transformers $HOME/Training-Looped-Transformers
 cd $HOME/Training-Looped-Transformers
 
 # Prepare environments
@@ -26,6 +26,8 @@ conda env create -f environment.yml --quiet
 
 # Activate the environment and log all packages that were installed
 conda activate loop-trans
+WANDB_KEY=$(cat WANDB_KEY)
+wandb login $WANDB_KEY
 
 cd scripts
 bash train.sh

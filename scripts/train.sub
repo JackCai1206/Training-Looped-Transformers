@@ -16,9 +16,9 @@ stream_error = True
 +GPUJobLength = "short"
 
 request_gpus = 1
-require_gpus = (GlobalMemoryMb >= 24000)
+require_gpus = (GlobalMemoryMb >= 70000)
 request_cpus = 1
 request_memory = 64GB
-request_disk = 16GB
+request_disk = 256GB
 
 queue

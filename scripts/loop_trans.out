@@ -1,8 +1,8 @@
-Date:  Wed Jun 21 14:12:06 CDT 2023
-Host:  gpu2007
+Date:  Thu Jun 22 12:05:06 CDT 2023
+Host:  gpu2009
 System:  Linux x86_64 GNU/Linux
 GPU:  NVIDIA A100-SXM4-80GB NVIDIA A100-SXM4-80GB NVIDIA A100-SXM4-80GB NVIDIA A100-SXM4-80GB
-PREFIX=/var/lib/condor/execute/slot1/dir_350553/miniconda3
+PREFIX=/var/lib/condor/execute/slot1/dir_2234293/miniconda3
 Unpacking payload ...
 
 Installing base environment...
@@ -23,4 +23,37 @@ Verifying transaction: ...working... done
 Executing transaction: ...working... done
 Installing pip dependencies: ...working... done
 Executing: 
-torchrun --rdzv_backend=c10d --rdzv_endpoint=localhost:20001 --standalone --nnodes=1 --nproc_per_node=1 ../main.py --cuda --sim_type=v2 --curriculum --num_mem=32 --num_inst=32 -N=8 --num_train=100000 --num_valid=5000 --epochs=500 --log_interval=20 --save=../checkpoints --batch_size=2000 --eval_batch_size=5000 --emsize=256 --nhid=1024 --nlayers=14 --nhead=4 --dropout=0 --lr=2.28E-05 --grad_noise=0 --signed_mag=10 --optimizer=adam --scheduler=constant --patience=300 --criterion=ce --label_smoothing=0.5 --task=1 --fix_set --weight_decay=0 --wandb 
+torchrun --rdzv_backend=c10d --rdzv_endpoint=localhost:20001 --standalone --nnodes=1 --nproc_per_node=1 ../main.py --cuda --sim_type=v2 --num_mem=32 --num_inst=32 -N=8 --num_train=100000 --num_valid=5000 --epochs=500 --log_interval=20 --save=../checkpoints --batch_size=2000 --eval_batch_size=2500 --emsize=256 --nhid=1024 --nlayers=14 --nhead=4 --dropout=0 --lr=2.28E-05 --grad_noise=0 --signed_mag=10 --optimizer=adam --scheduler=constant --patience=300 --criterion=ce --label_smoothing=0.5 --task=1 --fix_set --weight_decay=0 --wandb 
+Run ID:  xqn5vmnc
+Trainable parameters 11064335
+| WARNING: ran out of memory, reducing batch size to  1818
+| WARNING: ran out of memory, reducing batch size to  1652
+| WARNING: ran out of memory, reducing batch size to  1501
+| WARNING: ran out of memory, reducing batch size to  1364
+| WARNING: ran out of memory, reducing batch size to  1240
+| WARNING: ran out of memory, reducing batch size to  1127
+| WARNING: ran out of memory, reducing batch size to  1024
+| WARNING: ran out of memory, reducing batch size to   930
+| WARNING: ran out of memory, reducing batch size to   845
+| WARNING: ran out of memory, reducing batch size to   768
+| WARNING: ran out of memory, reducing batch size to   698
+| WARNING: ran out of memory, reducing batch size to   634
+| WARNING: ran out of memory, reducing batch size to   576
+| WARNING: ran out of memory, reducing batch size to   523
+| WARNING: ran out of memory, reducing batch size to   475
+| WARNING: ran out of memory, reducing batch size to   431
+| WARNING: ran out of memory, reducing batch size to   391
+| WARNING: ran out of memory, reducing batch size to   355
+| WARNING: ran out of memory, reducing batch size to   322
+| WARNING: ran out of memory, reducing batch size to   292
+| WARNING: ran out of memory, reducing batch size to   265
+| WARNING: ran out of memory, reducing batch size to   240
+| WARNING: ran out of memory, reducing batch size to   218
+| WARNING: ran out of memory, reducing batch size to   198
+| WARNING: ran out of memory, reducing batch size to   179
+| WARNING: ran out of memory, reducing batch size to   162
+| WARNING: ran out of memory, reducing batch size to   147
+| WARNING: ran out of memory, reducing batch size to   133
+| WARNING: ran out of memory, reducing batch size to   120
+| WARNING: ran out of memory, reducing batch size to   109
+| WARNING: ran out of memory, reducing batch size to    99
