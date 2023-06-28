@@ -5,6 +5,7 @@ from torch import nn
 
 from simulator import SubleqSim
 from simulator.simulator_v2 import SubleqSimV2
+from simulator.simulator_v3 import SubleqSimV3
 
 class SubleqDataSet(Dataset):
     data_cache = defaultdict(dict)
@@ -38,13 +39,13 @@ class SubleqDataSet(Dataset):
 
 
 class SubleqDataSetV2(Dataset):
-    def __init__(self, sim: SubleqSimV2, num_data, task=2, fix_set=True):
+    def __init__(self, sim: SubleqSimV3, num_data, task=2, fix_set=True):
         self.num_data = num_data
         self.data_iter = self.get_data_iter(sim, num_data, task, fix_set)
         self.data_cache = defaultdict(dict)
         self.targets_cache = defaultdict(dict)
 
-    def get_data_iter(self, sim: SubleqSimV2, num_data, task=2, fix_set=True):
+    def get_data_iter(self, sim: SubleqSimV3, num_data, task=2, fix_set=True):
         i = 0
         # sim.create_state()
         while True:
@@ -55,7 +56,7 @@ class SubleqDataSetV2(Dataset):
             else:
                 x = torch.clone(sim.create_state())
                 # x = torch.clone(sim.tokenize_state()).to(device)
-                y = torch.clone(sim.step())
+                y = torch.clone(sim.step(verbose=i==0))
                 y = nn.functional.one_hot(y, sim.num_tokens).float()
                 if fix_set:
                     self.data_cache[i] = x

@@ -6,10 +6,13 @@ class SubleqSimV3():
     def __init__(self, mem_bits, num_mem, ary, curriculum=False, curriculum_num=0):
         if (math.ceil(math.log(num_mem, ary)) * 3 > mem_bits):
             raise Exception("mem_bits too small for num_mem")
+        if (num_mem < ary):
+            raise Exception("num_mem must be greater than ary, otherwise would fail to generate all possible states")
         self.num_mem = num_mem
         self.mem_bits = mem_bits
-        self.inst_arg_bits = mem_bits // 3
+        self.inst_arg_bits = math.ceil(math.log(num_mem, ary))
         self.ary = ary
+        self.max_val = self.ary ** self.mem_bits
 
         self.mem = torch.zeros((num_mem, mem_bits), dtype=torch.int8)
         self.dec_dictionary = {i: i for i in range(ary)}
@@ -24,37 +27,55 @@ class SubleqSimV3():
         return sum([x[i] * (self.ary ** i) for i in range(len(x))])
 
     def to_digits(self, x: torch.Tensor, num_digits: int):
-        digits = [(x // (self.ary ** i)) % self.ary for i in reversed(range(num_digits))]
+        x[x < 0] = self.max_val + x[x < 0]
+        digits = [(x // (self.ary ** i)) % self.ary for i in range(num_digits)]
         return torch.tensor(digits, dtype=torch.int8)
 
     def create_state(self):
         self.mem = torch.randint(0, self.ary, (self.num_mem, self.mem_bits))
+        # self.mem[0, 0: self.inst_arg_bits] = self.to_digits(torch.randint(0, self.num_mem, (1,)), self.inst_arg_bits)
         return self.tokenize_state()
 
-    def step(self):
-        pc_loc = self.mem[0, 0: self.inst_arg_bits]
-        pc = self.to_base10(pc_loc)
+    def step(self, verbose=False):
+        pc_loc = 0, slice(0, self.inst_arg_bits)
+        pc_og = self.to_base10(self.mem[pc_loc])
+        pc = pc_og % self.num_mem
+        if verbose:
+            print(f"pc_og: {pc_og}, pc: {pc}, pc_raw: {self.mem[pc_loc]}, mem_pc: {self.mem[pc % self.num_mem]}")
 
         a = self.to_base10(self.mem[pc, 0: self.inst_arg_bits])
         b = self.to_base10(self.mem[pc, self.inst_arg_bits: 2 * self.inst_arg_bits])
-        c = self.to_base10(self.mem[pc, 2 * self.inst_arg_bits: 3 * self.inst_arg_bits])
+        c_og = self.to_base10(self.mem[pc, 2 * self.inst_arg_bits: 3 * self.inst_arg_bits])
+        if verbose:
+            print(f"a: {a}, b: {b}, c: {c_og}")
+        a = a % self.num_mem
+        b = b % self.num_mem
+        c = c_og % self.num_mem
+        if verbose:
+            print(f"a: {a}, b: {b}, c: {c}")
+
         # Account for overflow and underflow
-        max_val = self.ary ** self.mem_bits
         mem_b = self.to_base10(self.mem[b])
         mem_a = self.to_base10(self.mem[a])
         diff = mem_b - mem_a
-        self.mem[b] = self.to_digits(diff % max_val, self.mem_bits)
+        self.mem[b] = self.to_digits(diff, self.mem_bits)
+        if verbose:
+            print(f"mem_b: {mem_b}, mem_a: {mem_a}, mem_b - mem_a: {diff}, diff_final: {self.mem[b]}")
 
-        if diff <= 0:
-            pc_loc = self.to_digits(c, self.inst_arg_bits)
+        if diff <= 0: 
+            self.mem[pc_loc] = self.to_digits(c_og, self.inst_arg_bits)
         else:
-            pc_loc = self.to_digits((pc + 1) % (self.mem.shape[0] - 1), self.inst_arg_bits)
+            self.mem[pc_loc] = self.to_digits((pc_og + 1) % (self.max_val), self.inst_arg_bits)
+        if verbose:
+            print(f"pc_final: {self.mem[pc_loc]}")
+
         return self.tokenize_state()
 
     def tokenize_state(self):
         comma = self.enc_dictionary[',']
-        mem_digits = reversed(torch.tensor([list(m) + [comma] for m in self.mem]).flatten())[:-1]
+        mem_digits = torch.tensor([list(m) + [comma] for m in self.mem]).flatten()[:-1]
         return mem_digits
 
-    def detok(self, tokens: torch.Tensor):
-        return ''.join([str(self.dec_dictionary[t.item()]) for t in tokens])
+    def detok(self, tokens: torch.Tensor, verbose=False):
+        og_str = ''.join([str(self.dec_dictionary[t.item()]) for t in tokens])
+        return ''.join([''.join(list(reversed(s))) + ',' for s in og_str.split(',')])

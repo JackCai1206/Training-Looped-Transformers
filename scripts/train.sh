@@ -1,6 +1,7 @@
 NUM_TRAINERS=1
 export CUDA_VISIBLE_DEVICES=0,1
-
+# export NCCL_DEBUG=WARN
+# CUDA_LAUNCH_BLOCKING=1 
 cmd=(
 torchrun \
     --rdzv_backend=c10d
@@ -14,23 +15,24 @@ torchrun \
     # -N=5
     # -n=24
     # --curriculum
-    --num_mem=4
+    --num_mem=16
     --num_inst=32
-    -N=6
+    -N=8
+    --ary=4
     --num_train=100000
     --num_valid=5000
-    --epochs=500
+    --epochs=1000
     --log_interval=20 
     --save=../checkpoints
-    --batch_size=2000
-    --eval_batch_size=2500 
+    --batch_size=1000
+    --eval_batch_size=500
     --emsize=256
     --nhid=1024
     --nlayers=14
     --nhead=4 
     --dropout=0 
     # --lr=1.72E-05
-    --lr=2.28E-05
+    --lr=0.5E-05
     # --lr=2.37E-05
     # --lr=3.06E-05
     # --lr=4.25E-02
@@ -50,7 +52,7 @@ torchrun \
     # --sweep_config=../sweep.yaml 
     # --sweep 
     # --sweep_id=asyggw01
-    # --wandb 
+    --wandb 
     # --resume=../checkpoints/devout-sweep-2/best-val-acc-0.4854-epoch-450.pt
 )
 

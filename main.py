@@ -86,6 +86,7 @@ parser.add_argument('-n', type=int, default=32, required=False, help='Total numb
 parser.add_argument('--num_mem', type=int, default=8, required=False, help='Number of memory locations')
 parser.add_argument('--num_inst', type=int, default=8, required=False, help='Number of instructions')
 parser.add_argument('--curriculum', default=False, required=False, action="store_true", help='Curriculum learning')
+parser.add_argument('--ary', type=int, default=10, required=False, help='Ary of the numbers')
 
 parser.add_argument('--num_train', type=int, default=100000, required=False, help='Number of training data points')
 parser.add_argument('--num_valid', type=int, default=5000, required=False, help='Number of validutation data points')
@@ -204,6 +205,7 @@ def train(model: LoopedTransformerModelV2, step, epoch, train_loader: DataLoader
         optimizer.zero_grad()
         data = data.to(args.device)
         targets = targets.to(args.device)
+        # with torch.cuda.amp.autocast(enabled=True):
         output = model(data)
         if args.sim_type == 'v2':
             pass
@@ -327,8 +329,8 @@ def main(args, checkpoint):
         num_inst = args.num_inst
         # train_sim = simulator.SubleqSimV2(max_val, num_mem, num_inst, curriculum=args.curriculum)
         # test_sim = simulator.SubleqSimV2(max_val, num_mem, num_inst)
-        train_sim = simulator.SubleqSimV3(mem_bits=args.N, num_mem=num_mem, ary=2)
-        test_sim = simulator.SubleqSimV3(mem_bits=args.N, num_mem=num_mem, ary=2)
+        train_sim = simulator.SubleqSimV3(mem_bits=args.N, num_mem=num_mem, ary=args.ary)
+        test_sim = simulator.SubleqSimV3(mem_bits=args.N, num_mem=num_mem, ary=args.ary)
     else:
         train_sim = test_sim = simulator.SubleqSim(args.N, args.s, args.m, args.n, args.signed_mag, block_diag=args.block_diag)
 
@@ -338,6 +340,7 @@ def main(args, checkpoint):
 
     if args.sim_type == 'v2':
         model = LoopedTransformerModelV2(train_sim, args.emsize, args.nhead, args.nlayers, args.nhid, args.dropout).to(args.device)
+        # model = model.half()
     else:
         model = LoopedTransformerModel(train_sim, args.nhead, args.nlayers, args.nhid, args.dropout).to(args.device)
 
@@ -422,11 +425,11 @@ def main(args, checkpoint):
                     stop_train = True
                 except RuntimeError as e:
                     if 'out of memory' in str(e):
-                        args.batch_size = int(args.batch_size / 1.1)
+                        args.batch_size = int(args.batch_size / 1.2)
                         args.num_train_batches = args.num_train // args.batch_size
                         print('| WARNING: ran out of memory, reducing batch size to {:5d}'.format(args.batch_size))
-                        if args.batch_size < 100:
-                            stop_train = True
+                        # if args.batch_size < 100:
+                        #     stop_train = True
                         train_loader.dataset.clear_cache()
                         train_loader = DataLoader(train_loader.dataset, batch_size=args.batch_size, shuffle=False, drop_last=True)
                         # clear gpu data 
@@ -450,7 +453,7 @@ def main(args, checkpoint):
             # if validation accuracy is zero for 10 epochs, restart from last checkpoint
             val_acc_list.append(val_acc)
             if len(val_acc_list) > 10 and epoch > 100:
-                if sum(val_acc_list[-10:]) < 1e-3:
+                if sum(val_acc_list[-10:]) < 1e-3 and best_val_acc > 1e-3:
                     print('Validation accuracy is zero for 10 epochs, restarting from last checkpoint')
                     paths = glob.glob(os.path.join(args.save, wandb.run.name, 'best-val-acc-*'))
                     if len(paths) > 0:
@@ -461,7 +464,8 @@ def main(args, checkpoint):
                         scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
                         epoch_resume = checkpoint['epoch']
                         loss_resume = checkpoint['loss']
-                        train_sim.set_curriculum_num(checkpoint['curriculum_num'])
+                        if args.curriculum:
+                            train_sim.set_curriculum_num(checkpoint['curriculum_num'])
                         # add some noise to the model params
                         for param in model.parameters():
                             param.data += (torch.randn(param.size()) * 0.01).to(args.device)
@@ -486,27 +490,31 @@ def main(args, checkpoint):
                     'train_accuracy': train_acc,
                     'test_accuracy': val_acc,
                     'step': step,
-                    'curriculum_num': train_sim.curriculum_num
+                    'curriculum_num': train_sim.curriculum_num if args.curriculum else None
                 }, os.path.join(args.save, wandb.run.name, f'best-val-acc-{round(val_acc, 4)}-epoch-{epoch}.pt'))
                 best_val_loss = val_loss
                 best_val_acc = val_acc
             
             if train_acc > 0.99:
-                if train_sim.check_curriculum_done() and val_acc >= 0.98:
-                    
-                    print('Training done!')
-                    break
-                if not train_sim.check_curriculum_done():
-                    train_sim.set_curriculum_num(train_sim.curriculum_num + 1)
+                if args.curriculum:
+                    if train_sim.check_curriculum_done() and val_acc >= 0.98:
+                        print('Training done!')
+                        break
+                    if not train_sim.check_curriculum_done():
+                        train_sim.set_curriculum_num(train_sim.curriculum_num + 1)
 
-                print('Curriculum number', train_sim.curriculum_num)
-                if args.wandb:
-                    wandb.log({ 'curriculum_num': train_sim.curriculum_num}, step=step)
-                train_dataset.clear_cache()
-                # reset the learning rate but with a lower patience
-                for param_group in optimizer.param_groups:
-                    param_group['lr'] = args.lr if train_sim.curriculum_num < 7 else 1e-5
-                    param_group['patience'] = 40
+                    print('Curriculum number', train_sim.curriculum_num)
+                    if args.wandb:
+                        wandb.log({ 'curriculum_num': train_sim.curriculum_num}, step=step)
+                    train_dataset.clear_cache()
+                    # reset the learning rate but with a lower patience
+                    for param_group in optimizer.param_groups:
+                        param_group['lr'] = args.lr if train_sim.curriculum_num < 7 else 1e-5
+                        param_group['patience'] = 40
+                else:
+                    if val_acc >= 0.98:
+                        print('Training done!')
+                        break
 
             # elif val_loss < best_val_loss + 0.01:
             #     pass
