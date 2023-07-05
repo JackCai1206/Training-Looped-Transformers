@@ -9,11 +9,11 @@ metric:
 #   eta: 3
 parameters:
   num_mem:
-    values: [12, 14, 16, 18, 20]
-  num_inst:
-    values: [8]
+    values: [16]
   N:
     values: [8]
+  ary:
+    values: [2,4,6,8,10]
   # em_size:
   #   values: [128, 256]
   # nhid:

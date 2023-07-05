@@ -15,24 +15,24 @@ torchrun \
     # -N=5
     # -n=24
     # --curriculum
-    --num_mem=16
+    --num_mem=32
     --num_inst=32
     -N=8
-    --ary=4
+    --ary=2
     --num_train=100000
     --num_valid=5000
-    --epochs=1000
+    --epochs=1500
     --log_interval=20 
     --save=../checkpoints
     --batch_size=1000
-    --eval_batch_size=500
-    --emsize=256
-    --nhid=1024
+    --eval_batch_size=1000
+    --emsize=128
+    --nhid=512
     --nlayers=14
     --nhead=4 
     --dropout=0 
     # --lr=1.72E-05
-    --lr=0.5E-05
+    --lr=2.5E-05
     # --lr=2.37E-05
     # --lr=3.06E-05
     # --lr=4.25E-02
@@ -44,7 +44,7 @@ torchrun \
     --scheduler=constant
     --patience=300
     --criterion=ce
-    --label_smoothing=0.5
+    --label_smoothing=0.3
     --task=1
     --fix_set
     --weight_decay=0
