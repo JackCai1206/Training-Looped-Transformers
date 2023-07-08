@@ -1,5 +1,5 @@
 NUM_TRAINERS=1
-export CUDA_VISIBLE_DEVICES=0,1
+export CUDA_VISIBLE_DEVICES=1
 # export NCCL_DEBUG=WARN
 # CUDA_LAUNCH_BLOCKING=1 
 cmd=(
@@ -21,7 +21,7 @@ torchrun \
     --ary=2
     --num_train=100000
     --num_valid=5000
-    --epochs=1500
+    --epochs=10000
     --log_interval=20 
     --save=../checkpoints
     --batch_size=1000
@@ -32,7 +32,7 @@ torchrun \
     --nhead=4 
     --dropout=0 
     # --lr=1.72E-05
-    --lr=2.5E-05
+    --lr=5E-05
     # --lr=2.37E-05
     # --lr=3.06E-05
     # --lr=4.25E-02
@@ -49,8 +49,8 @@ torchrun \
     --fix_set
     --weight_decay=0
     # --lr_finder
-    # --sweep_config=../sweep.yaml 
-    # --sweep 
+    --sweep_config=../sweep.yaml 
+    --sweep 
     # --sweep_id=asyggw01
     --wandb 
     # --resume=../checkpoints/devout-sweep-2/best-val-acc-0.4854-epoch-450.pt
