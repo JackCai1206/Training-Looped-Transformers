@@ -52,8 +52,8 @@ parser.add_argument('--dropout', type=float, default=0.2,
                     help='dropout applied to layers (0 = no dropout)')
 parser.add_argument('--seed', type=int, default=1111,
                     help='random seed')
-parser.add_argument('--cuda', action='store_true', default=True,
-                    help='use CUDA')
+# parser.add_argument('--cuda', action='store_true', default=True,
+#                     help='use CUDA')
 parser.add_argument('--mps', action='store_true', default=False,
                         help='enables macOS GPU training')
 parser.add_argument('--log_interval', type=int, default=20, metavar='N',
@@ -99,6 +99,7 @@ parser.add_argument('--wandb', action='store_true', default=False)
 parser.add_argument('--sweep', action='store_true', default=False)
 parser.add_argument('--sweep_config', type=str, default=None)
 parser.add_argument('--sweep_id', type=str, default=None)
+parser.add_argument('--run_id', type=str, default=None)
 
 ###############################################################################
 # Training code
@@ -197,8 +198,10 @@ def train(model: LoopedTransformerModelV2, step, epoch, train_loader: DataLoader
     start_time = time.time()
     num_el = 0
     num_correct = 0
+    num_examples = 0
     for i, (data, targets) in enumerate(train_loader):
-        step += 1
+        num_examples += data.shape[0]
+        step = num_examples // 1000
         i = i+1
         # Starting each batch, we detach the hidden state from how it was previously produced.
         # If we didn't, the model would try backpropagating all the way to start of the dataset.
@@ -279,7 +282,9 @@ def train(model: LoopedTransformerModelV2, step, epoch, train_loader: DataLoader
 
 def main(args, checkpoint):
     if args.wandb:
-        if args.resume and 'wandb_id' in checkpoint:
+        if args.run_id is not None:
+            run_id = args.run_id
+        elif args.resume and 'wandb_id' in checkpoint:
             run_id = checkpoint['wandb_id']
         else:
             run_id = wandb.util.generate_id()
@@ -297,20 +302,6 @@ def main(args, checkpoint):
 
     # Set the random seed manually for reproducibility.
     torch.manual_seed(args.seed)
-    if torch.cuda.is_available():
-        if not args.cuda:
-            print("WARNING: You have a CUDA device, so you should probably run with --cuda.")
-    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        if not args.mps:
-            print("WARNING: You have mps device, to enable macOS GPU run with --mps.")
-
-    use_mps = args.mps and torch.backends.mps.is_available()
-    if args.cuda:
-        args.device = torch.device("cuda")
-    elif use_mps:
-        args.device = torch.device("mps")
-    else:
-        args.device = torch.device("cpu")
 
     ###############################################################################
     # Load data
@@ -383,7 +374,8 @@ def main(args, checkpoint):
         scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         epoch_resume = checkpoint['epoch']
         loss_resume = checkpoint['loss']
-        train_sim.set_curriculum_num(checkpoint['curriculum_num'])
+        if 'curriculum' in checkpoint:
+            train_sim.set_curriculum_num(checkpoint['curriculum_num'])
         print('Resuming from epoch', epoch_resume, 'with loss', loss_resume)
     else:
         epoch_resume = 0
@@ -428,13 +420,22 @@ def main(args, checkpoint):
                     if 'out of memory' in str(e):
                         args.batch_size = int(args.batch_size / 1.2)
                         args.num_train_batches = args.num_train // args.batch_size
+                        wandb.config.update({'batch_size': args.batch_size}, allow_val_change=True)
                         print('| WARNING: ran out of memory, reducing batch size to {:5d}'.format(args.batch_size))
                         # if args.batch_size < 100:
                         #     stop_train = True
                         train_loader.dataset.clear_cache()
-                        train_loader = DataLoader(train_loader.dataset, batch_size=args.batch_size, shuffle=False, drop_last=True)
+                        del train_loader
                         # clear gpu data 
                         model.zero_grad(set_to_none=True)
+                        optimizer.zero_grad(set_to_none=True)
+                        model.cpu()
+                        del model
+                        gc.collect()
+                        torch.cuda.empty_cache()
+
+                        train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=False, drop_last=True)
+                        model = LoopedTransformerModelV2(train_sim, args.emsize, args.nhead, args.nlayers, args.nhid, args.dropout).to(args.device)
                     else:
                         raise e
 
@@ -504,7 +505,7 @@ def main(args, checkpoint):
                     'optimizer_state_dict': optimizer.state_dict(),
                     'scheduler_state_dict': scheduler.state_dict(),
                     'loss': val_loss,
-                    'wandb_id': run_id if args.wandb else None,
+                    'wandb_id': wandb.run.id if args.wandb else None,
                     'train_accuracy': train_acc,
                     'test_accuracy': val_acc,
                     'step': step,
@@ -545,32 +546,36 @@ def main(args, checkpoint):
         print('-' * 89)
         print('Exiting from training early')
 
-    # Load the best saved model.
-    paths = glob.glob(os.path.join(args.save, wandb.run.name, 'best-val-acc-*'))
-    if len(paths) > 0:
-        best_path = max(paths, key=os.path.getctime)
-        checkpoint = torch.load(best_path)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        # with open(os.path.join(args.save, 'model.pt'), 'rb') as f:
-        #     model = torch.load(f)
-        #     # after load the rnn params are not a continuous chunk of memory
-        #     # this makes them a continuous chunk, and will speed up forward pass
-        #     # Currently, only rnn model supports flatten_parameters function.
-        #     if args.model in ['RNN_TANH', 'RNN_RELU', 'LSTM', 'GRU']:
-        #         model.rnn.flatten_parameters()
+    # # Load the best saved model.
+    # paths = glob.glob(os.path.join(args.save, wandb.run.name, 'best-val-acc-*'))
+    # if len(paths) > 0:
+    #     best_path = max(paths, key=os.path.getctime)
+    #     checkpoint = torch.load(best_path)
+    #     model.load_state_dict(checkpoint['model_state_dict'])
+    #     # with open(os.path.join(args.save, 'model.pt'), 'rb') as f:
+    #     #     model = torch.load(f)
+    #     #     # after load the rnn params are not a continuous chunk of memory
+    #     #     # this makes them a continuous chunk, and will speed up forward pass
+    #     #     # Currently, only rnn model supports flatten_parameters function.
+    #     #     if args.model in ['RNN_TANH', 'RNN_RELU', 'LSTM', 'GRU']:
+    #     #         model.rnn.flatten_parameters()
 
-        # Run on test data.
-        test_loss, test_acc = evaluate(model, step, epoch, eval_loader, criterion, test_sim, args)
-        torch.save(checkpoint, os.path.join(args.save, wandb.run.name, f'final-test-acc-{round(test_acc, 4)}.pt-epoch-{epoch}.pt'))
-    print('=' * 89)
-    print('| End of training | test loss {:5.2f}'.format(
-        test_loss))
-    print('=' * 89)
-    if args.wandb:
-        wandb.log({ 'test_loss': test_loss}, step=step, commit=True)
+    #     # Run on test data.
+    #     test_loss, test_acc = evaluate(model, step, epoch, eval_loader, criterion, test_sim, args)
+    #     torch.save(checkpoint, os.path.join(args.save, wandb.run.name, f'final-test-acc-{round(test_acc, 4)}.pt-epoch-{epoch}.pt'))
+    # print('=' * 89)
+    # print('| End of training | test loss {:5.2f}'.format(
+    #     test_loss))
+    # print('=' * 89)
+    # if args.wandb:
+    #     wandb.log({ 'test_loss': test_loss}, step=step, commit=True)
 
 if __name__ == '__main__':
     args = parser.parse_args()
+    local_rank = int(os.environ["LOCAL_RANK"])
+    args.device = torch.device("cuda", local_rank)
+    if local_rank != 0:
+        args.wandb = False
     checkpoint = None
     if args.resume is not None:
         checkpoint = torch.load(args.resume)

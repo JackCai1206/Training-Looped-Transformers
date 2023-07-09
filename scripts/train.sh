@@ -1,24 +1,23 @@
 NUM_TRAINERS=1
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=0
 # export NCCL_DEBUG=WARN
 # CUDA_LAUNCH_BLOCKING=1 
 cmd=(
-torchrun \
     --rdzv_backend=c10d
     --rdzv_endpoint=localhost:20001
     --standalone
     --nnodes=1 
     --nproc_per_node=$NUM_TRAINERS 
     ../main.py 
-    --cuda 
+    # --cuda 
     --sim_type=v2
     # -N=5
     # -n=24
     # --curriculum
-    --num_mem=32
+    --num_mem=128
     --num_inst=32
-    -N=8
-    --ary=2
+    -N=4
+    --ary=4
     --num_train=100000
     --num_valid=5000
     --epochs=10000
@@ -49,15 +48,16 @@ torchrun \
     --fix_set
     --weight_decay=0
     # --lr_finder
-    --sweep_config=../sweep.yaml 
-    --sweep 
-    # --sweep_id=asyggw01
+    # --sweep_config=../sweep.yaml 
+    # --sweep 
+    # --sweep_id=sjp4vhpp
     --wandb 
-    # --resume=../checkpoints/devout-sweep-2/best-val-acc-0.4854-epoch-450.pt
+    # --resume=
+    --run_id=195v4skm
 )
 
 echo "Executing: "
 printf "%q " "${cmd[@]}"
 echo
 
-"${cmd[@]}" 
+torchrun "${cmd[@]}" 
