@@ -429,13 +429,13 @@ def main(args, checkpoint):
                         # clear gpu data 
                         model.zero_grad(set_to_none=True)
                         optimizer.zero_grad(set_to_none=True)
-                        model.cpu()
-                        del model
+                        # model.cpu()
+                        # del model
                         gc.collect()
                         torch.cuda.empty_cache()
 
                         train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=False, drop_last=True)
-                        model = LoopedTransformerModelV2(train_sim, args.emsize, args.nhead, args.nlayers, args.nhid, args.dropout).to(args.device)
+                        # model = LoopedTransformerModelV2(train_sim, args.emsize, args.nhead, args.nlayers, args.nhid, args.dropout).to(args.device)
                     else:
                         raise e
 
@@ -572,10 +572,14 @@ def main(args, checkpoint):
 
 if __name__ == '__main__':
     args = parser.parse_args()
-    local_rank = int(os.environ["LOCAL_RANK"])
-    args.device = torch.device("cuda", local_rank)
-    if local_rank != 0:
-        args.wandb = False
+    if 'LOCAL_RANK' in os.environ:
+        local_rank = int(os.environ["LOCAL_RANK"])
+        args.device = torch.device("cuda", local_rank)
+        if local_rank != 0:
+            args.wandb = False
+    else:
+        args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     checkpoint = None
     if args.resume is not None:
         checkpoint = torch.load(args.resume)

@@ -3,11 +3,11 @@ export CUDA_VISIBLE_DEVICES=0
 # export NCCL_DEBUG=WARN
 # CUDA_LAUNCH_BLOCKING=1 
 cmd=(
-    --rdzv_backend=c10d
-    --rdzv_endpoint=localhost:20001
-    --standalone
-    --nnodes=1 
-    --nproc_per_node=$NUM_TRAINERS 
+    # --rdzv_backend=c10d
+    # --rdzv_endpoint=localhost:20001
+    # --standalone
+    # --nnodes=1 
+    # --nproc_per_node=$NUM_TRAINERS 
     ../main.py 
     # --cuda 
     --sim_type=v2
@@ -60,4 +60,4 @@ echo "Executing: "
 printf "%q " "${cmd[@]}"
 echo
 
-torchrun "${cmd[@]}" 
+python "${cmd[@]}" 
