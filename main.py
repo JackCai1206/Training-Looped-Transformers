@@ -160,6 +160,16 @@ def evaluate(model, step, epoch, eval_loader, criterion, sim, args):
                 # num_el += output.shape[0] * (output.shape[1] - sim.num_inst - 1)
                 num_correct += torch.sum(torch.prod(output == targets, dim=-1)).item()
                 num_el += output.shape[0]
+                # log the incorrect examples to terminal 
+                # wrong = torch.nonzero(torch.prod(output == targets, dim=-1) == 0)
+                # if len(wrong) > 0:
+                #     print('Wrong examples:')
+                #     for w in wrong:
+                #         # use diff tool
+                #         print(sim.detok(data[w].detach().cpu().numpy()))
+                #         print(sim.detok(output[w].detach().cpu().numpy()))
+                #         print(sim.detok(targets[w].detach().cpu().numpy()))
+                #         print('')
             else:
                 num_correct += torch.sum(torch.prod(torch.flatten(output.long() == targets.long(), -2, -1), dim=-1)).item()
                 num_el += output.shape[0]
@@ -201,7 +211,9 @@ def train(model: LoopedTransformerModelV2, step, epoch, train_loader: DataLoader
     num_examples = 0
     for i, (data, targets) in enumerate(train_loader):
         num_examples += data.shape[0]
-        step = num_examples // 1000
+        if num_examples >= 1000:
+            step += 1
+            num_examples -= 1000
         i = i+1
         # Starting each batch, we detach the hidden state from how it was previously produced.
         # If we didn't, the model would try backpropagating all the way to start of the dataset.
@@ -271,6 +283,8 @@ def train(model: LoopedTransformerModelV2, step, epoch, train_loader: DataLoader
     if args.wandb:
         wandb.log({ 'train_acc': num_correct / num_el}, step=step, commit=False)
 
+    if num_examples > 500:
+        step += 1
     return step, num_correct / num_el
 
 # def export_onnx(path, batch_size, seq_len):
@@ -371,6 +385,9 @@ def main(args, checkpoint):
     if args.resume is not None:
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        optimizer.param_groups[0]['lr'] = args.lr
+        optimizer.param_groups[0]['weight_decay'] = args.weight_decay
+        optimizer.param_groups[0]['betas'] = args.betas
         scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         epoch_resume = checkpoint['epoch']
         loss_resume = checkpoint['loss']
@@ -498,8 +515,8 @@ def main(args, checkpoint):
 
             # Save the model if the val accuracy is the best we've seen so far.
             # if not best_val_loss or val_loss < best_val_loss:
-            if val_acc >= 0.98 or (args.wandb and epoch >= 50 and epoch % 50 == 0 and (not best_val_acc or val_acc > best_val_acc)):
-                torch.save({
+            if args.wandb and epoch >= 40 and epoch % 40 == 0 and (not best_val_acc or val_acc > best_val_acc):
+                checkpoint = {
                     'epoch': epoch,
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
@@ -511,11 +528,12 @@ def main(args, checkpoint):
                     'step': step,
                     'curriculum_num': train_sim.curriculum_num if args.curriculum else None,
                     'args': args
-                }, os.path.join(args.save, wandb.run.name, f'best-val-acc-{round(val_acc, 4)}-epoch-{epoch}.pt'))
+                }
+                torch.save(checkpoint, os.path.join(args.save, wandb.run.name, f'best-val-acc-{round(val_acc, 4)}-epoch-{epoch}.pt'))
                 best_val_loss = val_loss
                 best_val_acc = val_acc
             
-            if train_acc > 0.99:
+            if train_acc == 1:
                 if args.curriculum:
                     if train_sim.check_curriculum_done() and val_acc >= 0.98:
                         print('Training done!')
@@ -532,7 +550,7 @@ def main(args, checkpoint):
                         param_group['lr'] = args.lr if train_sim.curriculum_num < 7 else 1e-5
                         param_group['patience'] = 40
                 else:
-                    if val_acc >= 0.98:
+                    if val_acc == 1:
                         print('Training done!')
                         break
 
@@ -562,7 +580,7 @@ def main(args, checkpoint):
 
     #     # Run on test data.
     #     test_loss, test_acc = evaluate(model, step, epoch, eval_loader, criterion, test_sim, args)
-    #     torch.save(checkpoint, os.path.join(args.save, wandb.run.name, f'final-test-acc-{round(test_acc, 4)}.pt-epoch-{epoch}.pt'))
+    torch.save(checkpoint, os.path.join(args.save, wandb.run.name, f'final-val-acc-{round(val_acc, 4)}.pt-epoch-{epoch}.pt'))
     # print('=' * 89)
     # print('| End of training | test loss {:5.2f}'.format(
     #     test_loss))

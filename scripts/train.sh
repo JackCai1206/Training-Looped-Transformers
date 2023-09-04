@@ -14,20 +14,20 @@ cmd=(
     # -N=5
     # -n=24
     # --curriculum
-    --num_mem=128
+    --num_mem=10
     --num_inst=32
-    -N=4
-    --ary=4
-    --num_train=100000
+    -N=3
+    --ary=10
+    --num_train=300000
     --num_valid=5000
     --epochs=10000
     --log_interval=20 
     --save=../checkpoints
-    --batch_size=1000
-    --eval_batch_size=1000
+    --batch_size=2000
+    --eval_batch_size=2000
     --emsize=128
     --nhid=512
-    --nlayers=14
+    --nlayers=12
     --nhead=4 
     --dropout=0 
     # --lr=1.72E-05
@@ -43,17 +43,18 @@ cmd=(
     --scheduler=constant
     --patience=300
     --criterion=ce
-    --label_smoothing=0.3
+    --label_smoothing=0.1
     --task=1
     --fix_set
-    --weight_decay=0
+    --weight_decay=0.01
     # --lr_finder
     # --sweep_config=../sweep.yaml 
     # --sweep 
-    # --sweep_id=sjp4vhpp
+    # --sweep_id=4c63qrbi
     --wandb 
-    # --resume=
-    --run_id=195v4skm
+    # --resume=../checkpoints/breezy-sweep-2/final-val-acc-0.9992.pt-epoch-4957.pt
+    # --resume=../checkpoints/fresh-breeze-213/best-val-acc-0.9992-epoch-320.pt
+    # --run_id=bmnigkxb
 )
 
 echo "Executing: "
@@ -61,3 +62,4 @@ printf "%q " "${cmd[@]}"
 echo
 
 python "${cmd[@]}" 
+
