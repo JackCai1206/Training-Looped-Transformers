@@ -39,11 +39,12 @@ class SubleqDataSet(Dataset):
 
 
 class SubleqDataSetV2(Dataset):
-    def __init__(self, sim: SubleqSimV3, num_data, task=2, fix_set=True):
+    def __init__(self, sim: SubleqSimV3, num_data, task=2, fix_set=True, force_diff=True):
         self.num_data = num_data
         self.data_iter = self.get_data_iter(sim, num_data, task, fix_set)
         self.data_cache = defaultdict(dict)
         self.targets_cache = defaultdict(dict)
+        self.force_diff = force_diff
 
     def get_data_iter(self, sim: SubleqSimV3, num_data, task=2, fix_set=True):
         i = 0
@@ -54,7 +55,7 @@ class SubleqDataSetV2(Dataset):
                 x = self.data_cache[i]
                 y = self.targets_cache[i]
             else:
-                x = torch.clone(sim.create_state())
+                x = torch.clone(sim.create_state(force_diff=self.force_diff))
                 # x = torch.clone(sim.tokenize_state()).to(device)
                 y = torch.clone(sim.step(verbose=i==0))
                 y = nn.functional.one_hot(y, sim.num_tokens).float()

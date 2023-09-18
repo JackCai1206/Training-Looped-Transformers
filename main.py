@@ -93,6 +93,8 @@ parser.add_argument('--num_valid', type=int, default=5000, required=False, help=
 parser.add_argument('--signed_mag', type=int, default=10, required=False, help='Magnitude of signed binary numbers')
 parser.add_argument('--task', type=int, default=1, required=False, help='Task for curriculum learning')
 parser.add_argument('--fix_set', default=False, required=False, action="store_true", help="Fix the train/val set for each epoch.")
+parser.add_argument('--force-diff', default=False, action="store_true", help="Force the difference between A and B to be close to 0.")
+parser.add_argument('--use_modulo', default=False, action="store_true", help="Use modulo for overflow and underflow.")
 
 parser.add_argument('--lr_finder', action='store_true', default=False)
 parser.add_argument('--wandb', action='store_true', default=False)
@@ -100,6 +102,7 @@ parser.add_argument('--sweep', action='store_true', default=False)
 parser.add_argument('--sweep_config', type=str, default=None)
 parser.add_argument('--sweep_id', type=str, default=None)
 parser.add_argument('--run_id', type=str, default=None)
+parser.add_argument('--run_name', type=str, default=None)
 
 ###############################################################################
 # Training code
@@ -303,7 +306,7 @@ def main(args, checkpoint):
         else:
             run_id = wandb.util.generate_id()
         print('Run ID: ', run_id)
-        wandb.init(project="training-looped-transformers", resume="allow", config=args, id=run_id)
+        wandb.init(project="training-looped-transformers", resume="allow", config=args, id=run_id, name=args.run_name)
         if args.sweep:
             args_dict = vars(args)
             args_dict.update(wandb.config)
@@ -335,8 +338,8 @@ def main(args, checkpoint):
         num_inst = args.num_inst
         # train_sim = simulator.SubleqSimV2(max_val, num_mem, num_inst, curriculum=args.curriculum)
         # test_sim = simulator.SubleqSimV2(max_val, num_mem, num_inst)
-        train_sim = simulator.SubleqSimV3(mem_bits=args.N, num_mem=num_mem, ary=args.ary)
-        test_sim = simulator.SubleqSimV3(mem_bits=args.N, num_mem=num_mem, ary=args.ary)
+        train_sim = simulator.SubleqSimV3(mem_bits=args.N, num_mem=num_mem, ary=args.ary, use_modulo=args.use_modulo)
+        test_sim = simulator.SubleqSimV3(mem_bits=args.N, num_mem=num_mem, ary=args.ary, use_modulo=args.use_modulo)
     else:
         train_sim = test_sim = simulator.SubleqSim(args.N, args.s, args.m, args.n, args.signed_mag, block_diag=args.block_diag)
 
@@ -380,7 +383,7 @@ def main(args, checkpoint):
     elif args.scheduler == 'constant':
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=100, gamma=1)
     
-    scheduler = param_scheduler.create_lr_scheduler_with_warmup(scheduler, 5e-7, args.warmup_steps)
+    # scheduler = param_scheduler.create_lr_scheduler_with_warmup(scheduler, 5e-7, args.warmup_steps)
 
     if args.resume is not None:
         model.load_state_dict(checkpoint['model_state_dict'])
@@ -401,8 +404,8 @@ def main(args, checkpoint):
     args.num_eval_batches = args.num_valid // args.eval_batch_size
     args.num_train_batches = args.num_train // args.batch_size
     if args.sim_type == 'v2':
-        train_dataset = SubleqDataSetV2(train_sim, args.num_train, task=args.task, fix_set=args.fix_set)
-        val_dataset = SubleqDataSetV2(test_sim, args.num_valid, task=args.task, fix_set=args.fix_set)
+        train_dataset = SubleqDataSetV2(train_sim, args.num_train, task=args.task, fix_set=args.fix_set, force_diff=args.force_diff)
+        val_dataset = SubleqDataSetV2(test_sim, args.num_valid, task=args.task, fix_set=args.fix_set, force_diff=False)
         train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=False, drop_last=True)
         eval_loader = DataLoader(val_dataset, batch_size=args.eval_batch_size, shuffle=False, drop_last=True)
     else:
@@ -515,7 +518,7 @@ def main(args, checkpoint):
 
             # Save the model if the val accuracy is the best we've seen so far.
             # if not best_val_loss or val_loss < best_val_loss:
-            if args.wandb and epoch >= 40 and epoch % 40 == 0 and (not best_val_acc or val_acc > best_val_acc):
+            if args.wandb and epoch >= 40 and epoch % (int(400 * (1-best_val_acc)) + 1) == 0 and (not best_val_acc or val_acc > best_val_acc):
                 checkpoint = {
                     'epoch': epoch,
                     'model_state_dict': model.state_dict(),
@@ -580,7 +583,7 @@ def main(args, checkpoint):
 
     #     # Run on test data.
     #     test_loss, test_acc = evaluate(model, step, epoch, eval_loader, criterion, test_sim, args)
-    torch.save(checkpoint, os.path.join(args.save, wandb.run.name, f'final-val-acc-{round(val_acc, 4)}.pt-epoch-{epoch}.pt'))
+    torch.save(checkpoint, os.path.join(args.save, wandb.run.name, f'final-val-acc-{round(val_acc, 4)}-epoch-{epoch}.pt'))
     # print('=' * 89)
     # print('| End of training | test loss {:5.2f}'.format(
     #     test_loss))

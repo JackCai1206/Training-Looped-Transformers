@@ -3,7 +3,7 @@ import torch
 import math
 
 class SubleqSimV3():
-    def __init__(self, mem_bits, num_mem, ary, curriculum=False, curriculum_num=0):
+    def __init__(self, mem_bits, num_mem, ary, curriculum=False, curriculum_num=0, use_modulo=False):
         # if (math.ceil(math.log(num_mem, ary)) * 3 > mem_bits):
         #     raise Exception("mem_bits too small for num_mem")
         if (num_mem < ary):
@@ -17,9 +17,11 @@ class SubleqSimV3():
         self.dec_dictionary = {i: i for i in range(ary)}
         c = len(self.dec_dictionary)
         self.dec_dictionary[c] = ","
+
         # invert the dictionary
         self.enc_dictionary = {v: k for k, v in self.dec_dictionary.items()}
         self.num_tokens = len(self.dec_dictionary)
+        self.use_modulo = use_modulo
 
     def to_base10(self, x: torch.Tensor):
         x.squeeze()
@@ -32,19 +34,38 @@ class SubleqSimV3():
         return torch.tensor(digits, dtype=torch.int8)
 
     def create_state(self, force_diff=True):
-        self.mem = torch.randint(0, self.ary, (self.num_mem, self.mem_bits))
+        if self.use_modulo:
+            self.mem = torch.randint(0, self.ary, (self.num_mem, self.mem_bits))
+        else:
+            self.mem[0] = self.to_digits(torch.randint(0, self.num_mem // 3, (1,)) * 3 + 1, self.mem_bits)
+            a_loc = self.to_base10(self.mem[0])
+            b_loc = (a_loc + 1)
+            c_loc = (a_loc + 2)
+            assert a_loc < self.num_mem and b_loc < self.num_mem and c_loc < self.num_mem
+            b = self.to_base10(self.mem[b_loc])
+            self.mem[a_loc] = self.to_digits(torch.randint(0, b + 1, (1,)), self.mem_bits)
+            a = self.to_base10(self.mem[a_loc])
+            assert a <= b
+            self.mem[c_loc] = self.to_digits(torch.randint(0, self.num_mem // 3, (1,)) * 3 + 1, self.mem_bits)
+
         # With low probability, set the difference between A and B to be close to 0
-        if torch.rand(1) < 0.6 and force_diff:
+        if torch.rand(1) < 0.2 and force_diff:
             a_loc = self.to_base10(self.mem[0]) % self.num_mem
             b_loc = (a_loc + 1) % self.num_mem
             b = self.to_base10(self.mem[b_loc])
-            b_noise = torch.clip(b + torch.round(torch.normal(0, 2, (1,))), 0, self.max_val).int()
+            b_noise = torch.clip(b + torch.round(torch.normal(0, 0.25, (1,))), 0, self.max_val).int()
+            # print(abs(b_noise - b))
             self.mem[a_loc] = self.to_digits(b_noise, self.mem_bits)
         return self.tokenize_state()
 
     def set_state(self, tokens: torch.Tensor):
         comma = torch.tensor([self.enc_dictionary[',']], dtype=torch.int8)
         self.mem = torch.stack(torch.cat((tokens, comma)).split(self.mem_bits + 1))[:, :-1]
+        return self.tokenize_state()
+    
+    # input is a list of mem values
+    def set_state_val(self, values: torch.Tensor):
+        self.mem = torch.stack([self.to_digits(v, self.mem_bits) for v in values])
         return self.tokenize_state()
 
     def step(self, verbose=False):
@@ -88,7 +109,7 @@ class SubleqSimV3():
 
     def readable_state(self, tokens: torch.Tensor):
         comma = torch.tensor([self.enc_dictionary[',']], dtype=torch.int8)
-        state = torch.cat((tokens, comma)).split(int((len(tokens) + 1) / self.num_mem))
+        state = torch.cat((tokens, comma)).split(self.mem_bits + 1)
         state = torch.stack(state)[:, :-1]
         state = [int(self.to_base10(s)) for s in state]
         pc = state[0] % self.num_mem
@@ -101,7 +122,7 @@ class SubleqSimV3():
         return {'pc': int(pc),
                 'eval': 'mem[{}]({}) <-- mem[{}]({}) - mem[{}]({}) = {}'.format(b, b_val, b, b_val, a, a_val, diff),
                 'jump': 'pc <-- {}'.format(c) if diff <= 0 else 'pc <-- pc + 3, c={}'.format(c),
-                'diff': diff,
+                'diff': str(diff) + '-->' + str(self.to_digits(torch.tensor([diff]), self.mem_bits).tolist()),
                 'mem': state}
 
     def detok(self, tokens: torch.Tensor, verbose=False):

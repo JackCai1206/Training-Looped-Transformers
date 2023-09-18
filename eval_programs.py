@@ -1,10 +1,12 @@
+import ast
 import difflib
 import torch
 
 from model.model import LoopedTransformerModelV2
 import simulator
+import sys
 
-checkpoint_path = 'checkpoints/divine-oath-219/best-val-acc-0.999-epoch-360.pt'
+checkpoint_path = sys.argv[1]
 num_trials = 100
 
 checkpoint = torch.load(checkpoint_path)
@@ -24,10 +26,12 @@ def model_step(model, state):
 trials = []
 failed = []
 fail_state = []
+diffs = []
+diff_pos = []
 for i in range(num_trials):
     print(f"Trial {i}")
     start = train_sim.create_state(force_diff=False)
-    trials.append({start})
+    trials.append({str(start.tolist())})
     failed.append(0)
     fail_state.append(None)
     has_loop = False
@@ -37,6 +41,8 @@ for i in range(num_trials):
             current_state = train_sim.tokenize_state()
             next_state_hyp = model_step(model, current_state)
         next_state = train_sim.step()
+        diff_pos += torch.atleast_1d(torch.nonzero(current_state != next_state).squeeze()).tolist()
+        diffs.append(abs(train_sim.readable_state(next_state)['diff']))
         if failed[i] == 0 and not torch.all(next_state_hyp == next_state, dim=-1):
             diff = difflib.ndiff([str(next_state_hyp.tolist())], [str(next_state.tolist())])
             print('\n'.join(diff))
@@ -48,6 +54,11 @@ for i in range(num_trials):
         else:
             has_loop = True
     print()
+
+# for trial in trials:
+#     for state in trial:
+#         print(train_sim.readable_state(torch.tensor(ast.literal_eval(state)))['mem'])
+#     print('------------------')
 
 print([(len(trials[i]), failed[i]) for i in range(len(trials))])
 
@@ -62,7 +73,7 @@ sorted_idx = np.argsort(np.array([len(trials[i]) for i in range(len(trials))]))[
 trials = [trials[i] for i in sorted_idx]
 failed = [failed[i] for i in sorted_idx]
 plt.figure(figsize=(20, 20))
-plt.subplot(211)
+plt.subplot(411)
 plt.bar(range(len(trials)), [len(trials[i]) for i in range(len(trials))])
 plt.bar(range(len(trials)), failed, color='red')
 plt.subplots_adjust(wspace=0)
@@ -71,11 +82,25 @@ plt.xlabel('Trial')
 plt.ylabel('Loop Length')
 plt.title('Loop Lengths')
 
-plt.subplot(212)
-plt.hist([len(trials[i]) for i in range(len(trials))], bins=1000)
+plt.subplot(412)
+plt.hist([len(trials[i]) for i in range(len(trials))])
 plt.subplots_adjust(wspace=0)
 plt.xlabel('Loop Length')
 plt.ylabel('Frequency')
-plt.title('Loop Lengths')
+plt.yscale('log')
+plt.title('Loop Length frequencies')
+
+plt.subplot(413)
+plt.hist(diffs)
+plt.subplots_adjust(wspace=0)
+plt.xlabel('Difference')
+plt.ylabel('Frequency')
+
+print(diff_pos)
+plt.subplot(414)
+plt.hist(diff_pos)
+plt.subplots_adjust(wspace=0)
+plt.xlabel('Modified Register Position')
+plt.ylabel('Frequency')
 
 plt.savefig('figures/' + checkpoint_path.split('/')[1] + '_loop-lengths.png')
