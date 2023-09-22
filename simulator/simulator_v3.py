@@ -17,7 +17,6 @@ class SubleqSimV3():
         self.dec_dictionary = {i: i for i in range(ary)}
         c = len(self.dec_dictionary)
         self.dec_dictionary[c] = ","
-
         # invert the dictionary
         self.enc_dictionary = {v: k for k, v in self.dec_dictionary.items()}
         self.num_tokens = len(self.dec_dictionary)
